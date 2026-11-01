@@ -69,6 +69,7 @@ jobs:
           import json
           from pathlib import Path
           data = json.loads(Path("public/data/dashboard.json").read_text())
+          map_count = len(list(Path("public/data/maps").glob("*.png")))
           links = {url for model in data.get("models", {}).values()
                    for levels in model.get("maps", {}).values()
                    for steps in levels.values() for url in steps.values()}
