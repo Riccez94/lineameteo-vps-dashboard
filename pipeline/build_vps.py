@@ -48,7 +48,18 @@ def herbie_init(init: dt.datetime) -> dt.datetime:
 
 
 def map_assets_present(model_data: dict) -> bool:
-    """A committed JSON feed alone is insufficient: Pages needs the PNGs on disk too."""
+    """Require every advertised map field, level and lead before reusing a run."""
+    maps = model_data.get("maps", {})
+    if not maps:
+        return False
+    expected_fields = {"vortex", "wind", "temp", "height"}
+    expected_steps = {str(step) for step in MAP_STEPS}
+    for level in LEVELS:
+        steps = maps.get(str(level), {})
+        if not expected_steps.issubset(steps):
+            return False
+        if any(not expected_fields.issubset(steps[step]) for step in expected_steps):
+            return False
     urls = [url for levels in model_data.get("maps", {}).values()
             for steps in levels.values() for url in steps.values() if isinstance(url, str)]
     return bool(urls) and all((MAPS / Path(urlsplit(url).path).name).is_file() for url in urls)
@@ -74,7 +85,9 @@ def var_name(ds: xr.Dataset, candidates: tuple[str, ...]) -> str | None:
 
 def pressure(ds: xr.Dataset, level: int) -> xr.Dataset:
     lev = coord(ds, ("isobaricInhPa", "pressure_level", "level"))
-    return ds.sel({lev: level})
+    # GRIB/xarray coordinates can contain floating pressure values (for example
+    # 9.999999 instead of 10); select the nearest level only within 1%.
+    return ds.sel({lev: level}, method="nearest", tolerance=max(0.05, level * 0.01))
 
 
 def polar_cap(da: xr.DataArray) -> xr.DataArray:
@@ -251,10 +264,10 @@ def save_model_step(ds: xr.Dataset, model: str, init: str, step: int, out: dict,
                 if normal is not None: rec[f"u{level}anom"] = current - normal
                 if sd not in (None, 0): rec[f"u{level}sigma"] = (current - normal) / sd
             if t_name:
-                current = cap_mean(levds[t_name]); rec[f"t{level}"] = current - 273.15
+                current_k = cap_mean(levds[t_name]); rec[f"t{level}"] = current_k - 273.15
                 normal = climatology_cap("air", valid.month, level); sd = climatology_cap("air", valid.month, level, "std")
-                if normal is not None: rec[f"t{level}anom"] = current - normal
-                if sd not in (None, 0): rec[f"t{level}sigma"] = (current - normal) / sd
+                if normal is not None: rec[f"t{level}anom"] = current_k - normal
+                if normal is not None and sd not in (None, 0): rec[f"t{level}sigma"] = (current_k - normal) / sd
             if z_name:
                 z = cap_mean(levds[z_name])
                 z = z / 9.80665 if z_name in ("z", "gh") else z
