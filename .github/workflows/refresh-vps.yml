@@ -60,6 +60,14 @@ jobs:
           else
             echo "No dashboard data changed."
           fi
+      - name: Stage generated maps for Pages upload
+        run: |
+          map_count=$(find public/data/maps -type f -name '*.png' | wc -l)
+          echo "Generated map images: $map_count"
+          test "$map_count" -gt 0
+          # Map PNGs are intentionally excluded from repository commits, but
+          # staging them makes the ignored files visible to the Pages uploader.
+          git add --force public/data/maps/*.png
       - name: Deploy current dashboard and maps to Cloudflare Pages
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

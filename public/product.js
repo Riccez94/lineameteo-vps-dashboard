@@ -46,7 +46,7 @@
     if(wave.length)chart($("#wave-chart"),[{name:"v′T′ 100 hPa",color:"#d76b28",points:wave}],"K·m/s",false);
   }
   function renderMaps(){
-    if(!s.data)return;let sel=$("#map-model").value,which=sel==="compare"?Object.keys(s.data.models||{}):sel==="ifs"?["ecmwf_ifs","ecmwf_ens"]:sel==="aifs"?["aifs","aifs_ens"]:[sel];
+    if(!s.data)return;$$("[data-level]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.level===s.level)));$$("[data-field]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.field===s.mapField)));let sel=$("#map-model").value,which=sel==="compare"?Object.keys(s.data.models||{}):sel==="ifs"?["ecmwf_ifs","ecmwf_ens"]:sel==="aifs"?["aifs","aifs_ens"]:[sel];
     let step=Math.round(s.step/4)*48,levels=s.level==="both"?[10,50]:[Number(s.level)],imgs=[];
     which.forEach(k=>levels.forEach(l=>{let url=s.data.models?.[k]?.maps?.[String(l)]?.[String(step)]?.[s.mapField];if(url)imgs.push({k:k,l:l,url:url,run:s.data.models[k].init})}));
     $("#map-step-label").textContent=step===0?"Analisi · +0 h":"Giorno "+(step/24)+" · +"+step+" h";
