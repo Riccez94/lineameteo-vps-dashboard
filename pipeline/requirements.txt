@@ -1,0 +1,10 @@
+cartopy>=0.24
+cfgrib>=0.9.15
+ecmwf-opendata>=0.3.20
+herbie-data>=2026.3.0
+matplotlib>=3.9
+netCDF4>=1.7
+numpy>=2.0
+pandas>=2.2
+pydap>=3.5
+xarray>=2025.1

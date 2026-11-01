@@ -1,0 +1,77 @@
+name: Refresh LineaMeteo VPS dashboard
+
+on:
+  schedule:
+    # Allow the operational fields time to appear on the public data servers.
+    - cron: "17 2,8,14,20 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "pipeline/**"
+      - ".github/workflows/refresh-vps.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vps-data-refresh
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - name: Install GRIB tools and libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes0 libeccodes-dev
+          python -m pip install --upgrade pip
+          pip install -r pipeline/requirements.txt
+          pip install awscli
+      - name: Download model data and build dashboard assets
+        env:
+          VPS_MAP_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          test -n "$VPS_MAP_BASE_URL" && test -n "$ACCOUNT_ID" && test -n "$R2_BUCKET"
+          mkdir -p public/data/maps
+          aws s3 cp "s3://${R2_BUCKET}/climatology/climatology.npz" public/data/climatology.npz --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" || true
+          python pipeline/build_vps.py
+      - name: Publish original maps to Cloudflare R2
+        env:
+          VPS_MAP_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          test -n "$VPS_MAP_BASE_URL"
+          test -n "$ACCOUNT_ID" && test -n "$R2_BUCKET"
+          aws s3 sync public/data/maps/ "s3://$R2_BUCKET/maps/" --endpoint-url "https://$ACCOUNT_ID.r2.cloudflarestorage.com"
+          aws s3 cp public/data/climatology.npz "s3://$R2_BUCKET/climatology/climatology.npz" --endpoint-url "https://$ACCOUNT_ID.r2.cloudflarestorage.com"
+      - name: Publish generated dashboard data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/data/dashboard.json public/data/history.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update VPS model data and maps"
+            git push origin HEAD:main
+          else
+            echo "No dashboard data changed."
+          fi

@@ -1,0 +1,4 @@
+public/data/maps/*
+public/data/climatology.npz
+public/data/.grib-cache/
+public/data/.aifs-ens-u10.grib2
