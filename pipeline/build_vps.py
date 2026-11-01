@@ -41,6 +41,11 @@ def latest_cycle(now: dt.datetime, hours: tuple[int, ...], delay: int = 8) -> dt
     return candidate
 
 
+def herbie_init(init: dt.datetime) -> dt.datetime:
+    """Herbie expects a naive datetime; all pipeline cycle times are UTC."""
+    return init.astimezone(dt.timezone.utc).replace(tzinfo=None) if init.tzinfo else init
+
+
 def open_grib(path: Path) -> xr.Dataset:
     return xr.open_dataset(path, engine="cfgrib", backend_kwargs={
         "indexpath": "", "filter_by_keys": {"typeOfLevel": "isobaricInhPa"},
@@ -296,7 +301,7 @@ def fetch_noaa(model_key: str, noaa_model: str, product: str, member: str | None
     for step in steps:
         try:
             kwargs = {"member": member} if member else {}
-            h = Herbie(init, model=noaa_model, product=product, fxx=step, save_dir=str(DATA / ".grib-cache"), **kwargs)
+            h = Herbie(herbie_init(init), model=noaa_model, product=product, fxx=step, save_dir=str(DATA / ".grib-cache"), **kwargs)
             levexpr = "1000|925|850|700|500|300|200|150|100|70|50|30|20|15|10|7|5|3|2|1" if model_key == "gfs" else "1000|925|850|700|500|300|200|150|100|70|50|30|10"
             path = h.download(searchString=":(UGRD|VGRD|TMP|HGT):(?:" + levexpr + ") mb:", verbose=False)
             if path is None: raise RuntimeError("NOAA/Herbie non ha restituito un sottoinsieme GRIB")
@@ -321,7 +326,7 @@ def fetch_gefs_raw_odds(init: dt.datetime, out: dict) -> None:
             member_paths[key] = {}
             for lead in leads:
                 try:
-                    h = Herbie(init, model="gefs", product="atmos.5", member=key, fxx=lead,
+                    h = Herbie(herbie_init(init), model="gefs", product="atmos.5", member=key, fxx=lead,
                                save_dir=tmp, verbose=False)
                     path = h.download(searchString=":UGRD:10 mb:", verbose=False)
                     if path is None: continue
