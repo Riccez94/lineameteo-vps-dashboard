@@ -1,55 +1,57 @@
 # LineaMeteo · VPS Lab
 
-Dashboard indipendente per il vortice polare stratosferico. Interfaccia, grafici e mappe sono generati per LineaMeteo; non sono riutilizzati gli asset del sito preso a riferimento.
+Dashboard indipendente per il vortice polare stratosferico. Interfaccia, grafici e mappe sono originali per LineaMeteo; non vengono riutilizzati gli asset grafici del sito preso a riferimento.
 
-## Cosa fa la versione automatizzata
+## Contenuti e aggiornamento
 
-- Raccoglie run pubblici ECMWF IFS, ECMWF ENS, AIFS, AIFS ENS, NOAA GFS e GEFS.
-- Calcola vento zonale medio a 60°N ai livelli di pressione, anomalie e valori standardizzati verticali, flusso eddy v′T′ a 100 hPa e riepiloghi di run.
-- Genera mappe polari originali di struttura, anomalia termica e anomalia geopotenziale a 10 e 50 hPa.
-- Archivia fino a 180 giorni di run compatti; confronta le previsioni maturate con l’analisi operativa IFS e calcola bias, MAE e RMSE.
-- Si aggiorna ogni sei ore tramite GitHub Actions; Cloudflare Pages pubblica il dashboard quando arrivano i nuovi dati.
-- La vista verticale usa anomalie e valori standardizzati fino a 10 hPa; il GFS mostra anche i livelli grezzi fino a 1 hPa, dove non è disponibile la climatologia scelta.
+- ECMWF IFS, ECMWF ENS, AIFS, AIFS ENS, NOAA GFS e GEFS.
+- Indicatori U60 a 10 hPa, previsione d'ensemble, quota grezza dei membri con U60 sotto zero e flusso eddy v′T′ a 100 hPa.
+- Mappe polari generate dal workflow: struttura/geopotenziale, anomalia di temperatura e geopotenziale, vento zonale a 10 e 50 hPa.
+- Vista verticale con anomalie e valori standardizzati fino a 10 hPa; GFS mostra anche valori grezzi fino a 1 hPa.
+- Confronto degli ultimi 6 o 12 run, andamento stagionale e verifica retrospettiva con bias, MAE e RMSE.
+- Aggiornamento ogni sei ore via GitHub Actions. Ogni esecuzione genera i dati e le immagini e li pubblica direttamente su Cloudflare Pages con Wrangler.
 
-Le quote grezze di membri con U60 sotto zero sono presentate per AIFS ENS e GEFS, separando run e lead e campionando +7, +10, +12 e +14 giorni; non sono probabilità calibrate né un test completo della definizione di SSW. I campi ensemble delle mappe mostrano la media del modello. La climatologia cartografica usa NCEP/NCAR Reanalysis 1, griglia 2,5°, 1991–2020. I punteggi di verifica maturano dopo l’avvio e confrontano i run con l’analisi operativa IFS, quindi non costituiscono una verifica indipendente.
+La dashboard non usa R2: non occorre attivare l’abbonamento R2 né creare bucket. Le mappe sono incluse nella distribuzione Pages corrente; il workflow conserva nel repository solo i JSON compatti dei dati e dello storico. La cache GitHub Actions conserva la climatologia NOAA per evitare di riscaricarla a ogni esecuzione.
 
-## Attivazione: un nuovo progetto GitHub e uno spazio R2
+Le quote grezze di membri con U60 sotto zero sono mostrate per AIFS ENS e GEFS ai lead +7, +10, +12 e +14 giorni; non sono probabilità calibrate né una verifica completa della definizione di SSW. I punteggi di accuratezza confrontano i run con l’analisi operativa IFS e non sono una verifica indipendente. La climatologia usa NCEP/NCAR Reanalysis 1, griglia 2,5°, 1991–2020.
 
-La pipeline elabora GRIB e conserva le mappe fuori dalla cartella pubblica Git. Per questo servono GitHub Actions, Cloudflare Pages e un bucket R2 pubblico in lettura per le immagini.
+## Configurazione
 
-### 1. Crea il repository GitHub
+### 1. Repository GitHub
 
-1. Crea un repository nuovo, ad esempio `lineameteo-vps-dashboard`.
-2. Carica **il contenuto** di questa cartella alla radice del repository: `public/`, `pipeline/`, `.github/` e i file di configurazione.
-3. In GitHub apri **Settings → Actions → General → Workflow permissions** e abilita **Read and write permissions**.
+Carica il contenuto di questa cartella nella radice del repository `lineameteo-vps-dashboard`. In **Settings → Actions → General → Workflow permissions**, seleziona **Read and write permissions**.
 
-### 2. Crea il bucket Cloudflare R2
+### 2. Progetto Cloudflare Pages senza R2
 
-1. Crea un bucket dedicato, ad esempio `lineameteo-vps-maps`.
-2. Abilita un dominio pubblico di sola lettura per il bucket (preferibilmente un dominio personalizzato R2; il dominio pubblico deve servire gli oggetti in `/maps/`).
-3. Crea un token R2 con accesso **Object Read & Write** solo a questo bucket.
-4. Nel repository GitHub aggiungi queste **Actions secrets**:
-   - `R2_ACCESS_KEY_ID`
-   - `R2_SECRET_ACCESS_KEY`
-5. Aggiungi queste **Actions variables**:
-   - `CLOUDFLARE_ACCOUNT_ID` — ID account Cloudflare
-   - `R2_BUCKET` — nome del bucket
-   - `R2_PUBLIC_BASE_URL` — base URL pubblico, ad esempio `https://mappe.tuodominio.it` (senza `/` finale)
+1. In Cloudflare torna a **Workers & Pages** e scegli **Create application → Pages → Direct Upload**. Non creare un bucket R2 e non attivare il relativo abbonamento.
+2. Crea il progetto `lineameteo-vps-dashboard` scegliendo **Direct Upload**, poi carica la cartella `public` contenuta nel pacchetto estratto. La pagina iniziale può mostrare “in attesa” finché non parte il primo aggiornamento automatico.
+3. Nota: Cloudflare non consente di convertire in seguito un progetto Direct Upload in un progetto Git-integrated. Qui il deploy automatico verrà gestito da GitHub Actions con Wrangler.
 
-Le chiavi restano nei segreti GitHub: non inserirle nel codice o nei post del forum.
+### 3. Token Cloudflare
 
-### 3. Collega il repository a Cloudflare Pages
+In **Cloudflare Dashboard → My Profile → API Tokens → Create Token → Custom Token**, crea un token con il permesso **Account → Cloudflare Pages → Edit**. Copialo subito: Cloudflare lo mostra una sola volta.
 
-1. In Cloudflare crea una nuova Pages application da Git e seleziona `lineameteo-vps-dashboard`; non scegliere il progetto MeteoSpoleto.
-2. Branch di produzione: `main`. Framework: **None**. Build command vuoto. Output directory: `public`.
-3. Avvia la prima pubblicazione. Poi in GitHub apri **Actions** e avvia manualmente **Refresh LineaMeteo VPS dashboard**.
-4. La pipeline scarica i primi dati, costruisce le mappe e aggiorna `public/data/dashboard.json`; il push su `main` attiva il deploy automatico di Pages.
+Nel repository GitHub vai a **Settings → Secrets and variables → Actions** e aggiungi:
 
-Il primo avvio crea una climatologia compatta 1991–2020 da NOAA PSL e può durare più dei successivi. Se un centro non ha ancora pubblicato un dato, la dashboard conserva il run precedente e riporta le disponibilità per modello.
+- **Repository secret** `CLOUDFLARE_API_TOKEN` — il token appena creato.
+- **Repository variable** `CLOUDFLARE_ACCOUNT_ID` — ID account Cloudflare.
+- **Repository variable** `CF_PAGES_PROJECT` — nome esatto del progetto Pages (`lineameteo-vps-dashboard` se hai usato quello consigliato).
+
+Non inserire mai il token nel codice o in un messaggio pubblico.
+
+### 4. Avvio
+
+Apri **Actions → Refresh LineaMeteo VPS dashboard → Run workflow** e avvia il workflow sul branch `main`. La prima esecuzione crea la climatologia e scarica i modelli; le successive riutilizzano la cache. Il deploy viene pubblicato all’indirizzo `https://<nome-progetto>.pages.dev`.
 
 ## Fonti e attribuzioni
 
 - [ECMWF Open Data](https://www.ecmwf.int/en/forecasts/datasets/open-data) per IFS e AIFS; mantenere l’attribuzione ECMWF e rispettarne i termini d’uso.
 - [NOAA/NCEP GEFS](https://www.nco.ncep.noaa.gov/pmb/products/gens/) e GFS per i campi operativi.
-- [NOAA PSL NCEP/NCAR Reanalysis](https://psl.noaa.gov/data/gridded/data.ncep.reanalysis.html) per la climatologia mensile 1991–2020; la pagina chiede citazione NOAA PSL.
-I dati restano distinguibili per modello, run, validità e fonte. Le immagini sono tracciati originali generati dai campi dei modelli, con etichette e baseline visibili. Il grafico stagionale e le verifiche si popolano via via che la pipeline archivia le analisi e che i run diventano verificabili.
+- [NOAA PSL NCEP/NCAR Reanalysis](https://psl.noaa.gov/data/gridded/data.ncep.reanalysis.html) per la climatologia 1991–2020.
+- [Cloudflare Pages Direct Upload](https://developers.cloudflare.com/pages/get-started/direct-upload/) e [deploy con GitHub Actions](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/) per la pubblicazione tramite Wrangler.
+
+## Note operative
+
+- La frequenza prevista è quattro aggiornamenti al giorno (ogni sei ore); se un archivio modello non ha ancora pubblicato il run atteso, la pipeline mantiene il run precedente disponibile.
+- La pipeline usa run e finestre di previsione pubbliche, quindi singoli modelli/campi possono mancare in un aggiornamento.
+- Il progetto è separato da MeteoSpoleto.
