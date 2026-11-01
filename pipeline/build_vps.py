@@ -10,6 +10,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import matplotlib
 matplotlib.use("Agg")
@@ -44,6 +45,13 @@ def latest_cycle(now: dt.datetime, hours: tuple[int, ...], delay: int = 8) -> dt
 def herbie_init(init: dt.datetime) -> dt.datetime:
     """Herbie expects a naive datetime; all pipeline cycle times are UTC."""
     return init.astimezone(dt.timezone.utc).replace(tzinfo=None) if init.tzinfo else init
+
+
+def map_assets_present(model_data: dict) -> bool:
+    """A committed JSON feed alone is insufficient: Pages needs the PNGs on disk too."""
+    urls = [url for levels in model_data.get("maps", {}).values()
+            for steps in levels.values() for url in steps.values() if isinstance(url, str)]
+    return bool(urls) and all((MAPS / Path(urlsplit(url).path).name).is_file() for url in urls)
 
 
 def open_grib(path: Path) -> xr.Dataset:
@@ -309,7 +317,9 @@ def fetch_noaa(model_key: str, noaa_model: str, product: str, member: str | None
             try: save_model_step(ds, model_key, init_iso, step, out, levels)
             finally: ds.close()
         except Exception as e:
-            LOG.warning("NOAA %s +%sh skipped: %s", model_key, step, e)
+            # Keep the traceback in Actions logs: NOAA data errors must be diagnosable
+            # instead of silently looking like a run with no available maps.
+            LOG.warning("NOAA %s +%sh skipped: %s", model_key, step, e, exc_info=True)
     if model_key == "gefs":
         fetch_gefs_raw_odds(init, out)
 
@@ -336,7 +346,7 @@ def fetch_gefs_raw_odds(init: dt.datetime, out: dict) -> None:
                         if uname: member_paths[key][lead] = u60(pressure(ds, 10)[uname])
                     finally: ds.close()
                 except Exception as e:
-                    LOG.warning("GEFS %s +%sh member unavailable: %s", key, lead, e)
+                    LOG.warning("GEFS %s +%sh member unavailable: %s", key, lead, e, exc_info=True)
     rows = []
     for lead in leads:
         exact = [v[lead] for v in member_paths.values() if lead in v]
@@ -462,9 +472,13 @@ def main() -> None:
     for model, task in jobs:
         try:
             expected_iso = expected[model].strftime("%Y-%m-%dT%H:%MZ")
-            if out["models"].get(model, {}).get("init") == expected_iso and out["models"].get(model, {}).get("series"):
+            current_model = out["models"].get(model, {})
+            if (current_model.get("init") == expected_iso and current_model.get("series")
+                    and map_assets_present(current_model)):
                 LOG.info("Keeping existing %s run %s", model, expected_iso)
                 continue
+            if current_model.get("init") == expected_iso and current_model.get("series"):
+                LOG.info("Rebuilding %s run %s because its map PNG files are missing", model, expected_iso)
             previous_model = out["models"].get(model)
             task()
             if not out["models"].get(model, {}).get("series") and previous_model:

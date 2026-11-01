@@ -1,7 +1,7 @@
 cartopy>=0.24
 cfgrib>=0.9.15
 ecmwf-opendata>=0.3.20
-herbie-data>=2026.3.0
+herbie-data>=2026.9.3
 matplotlib>=3.9
 netCDF4>=1.7
 numpy>=2.0

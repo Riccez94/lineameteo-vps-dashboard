@@ -65,6 +65,18 @@ jobs:
           map_count=$(find public/data/maps -type f -name '*.png' | wc -l)
           echo "Generated map images: $map_count"
           test "$map_count" -gt 0
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("public/data/dashboard.json").read_text())
+          links = {url for model in data.get("models", {}).values()
+                   for levels in model.get("maps", {}).values()
+                   for steps in levels.values() for url in steps.values()}
+          missing = [url for url in links if url.startswith("/data/maps/") and not Path("public", url.lstrip("/")).is_file()]
+          if not links or missing:
+              raise SystemExit(f"Map feed/files mismatch: {len(links)} links, {len(missing)} missing local PNGs")
+          print(f"Map feed verified: {len(links)} links, {map_count} local PNG files")
+          PY
           # Map PNGs are intentionally excluded from repository commits, but
           # staging them makes the ignored files visible to the Pages uploader.
           git add --force public/data/maps/*.png
@@ -76,3 +88,26 @@ jobs:
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID" && test -n "$CF_PAGES_PROJECT"
           npx --yes wrangler@4 pages deploy public --project-name "$CF_PAGES_PROJECT" --branch main
+      - name: Verify deployed map images
+        env:
+          CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from urllib.request import urlopen
+          data = json.loads(Path("public/data/dashboard.json").read_text())
+          links = sorted({url for model in data.get("models", {}).values()
+                          for levels in model.get("maps", {}).values()
+                          for steps in levels.values() for url in steps.values()})
+          if not links:
+              raise SystemExit("No map URLs in dashboard feed")
+          base = f"https://{os.environ['CF_PAGES_PROJECT']}.pages.dev"
+          for link in links[:10]:
+              url = link if link.startswith("http") else base + link
+              with urlopen(url, timeout=30) as response:
+                  body = response.read(8)
+                  if response.status != 200 or body != b"\x89PNG\r\n\x1a\n":
+                      raise SystemExit(f"Map verification failed: {url} returned non-PNG content")
+          print(f"Cloudflare map verification passed: {min(10, len(links))} image URLs return PNG")
+          PY
