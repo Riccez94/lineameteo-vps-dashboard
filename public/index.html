@@ -44,7 +44,7 @@
     <div class="freshness"><span class="live-dot"></span><span id="map-freshness">Seleziona il passo previsto con il cursore.</span></div>
     <article class="panel mapbox">
       <div id="map-display" class="map-placeholder"><div><strong>Mappe VPS</strong><span>In attesa del feed cartografico del run selezionato.</span></div></div>
-      <div class="sliderrow"><button id="map-play" class="playbtn" aria-label="Avvia animazione">▶</button><input id="map-step" type="range" min="0" max="28" step="1" value="0" aria-label="Passo di previsione"><output id="map-step-label">Analisi · +0 h</output></div>
+      <div class="sliderrow"><button id="map-play" class="playbtn" aria-label="Avvia animazione">▶</button><input id="map-step" type="range" min="0" max="7" step="1" value="0" aria-label="Passo di previsione"><output id="map-step-label">Analisi · +0 h</output></div>
       <div class="tickrow"><span>Ora</span><span>Giorno 3</span><span>Giorno 6</span><span>Giorno 9</span><span>Giorno 12</span><span>Giorno 15</span></div>
       <div class="map-caption"><span id="map-caption">Mappa non ancora disponibile.</span><span>Vista polare · Nord</span></div>
     </article>
@@ -65,8 +65,8 @@
       <div id="strength-legend" class="legend"></div>
     </article>
     <div class="grid-two">
-      <article class="panel mini-panel"><h3>Attività delle onde planetarie · 100 hPa</h3><p>Il flusso v′T′ è la media del prodotto tra le variazioni del vento nord-sud e della temperatura rispetto alla media longitudinale, fra 45° e 75°N. Un valore positivo segnala trasporto di calore verso il polo e può favorire la propagazione delle onde nella stratosfera. L’unità è K·m/s; non è un’anomalia climatica.</p><div id="wave-chart" class="chartbox" style="margin-top:10px;min-height:180px"><div class="chart-empty" style="min-height:160px">In attesa dei dati del run.</div></div></article>
-      <article class="panel mini-panel"><h3>Quanti membri prevedono venti orientali?</h3><p>Per ogni ensemble: membri con vento medio U60 sotto zero a 10 hPa, conteggio sul totale e scadenza. È una semplice frazione del campione in quel run, non una probabilità calibrata di SSW.</p><div id="odds-table" style="margin-top:12px;color:var(--muted);font-size:12px">In attesa dei dati d’ensemble.</div></article>
+      <article class="panel mini-panel"><h3>Flusso di calore delle onde · 100 hPa</h3><p>Il flusso v′T′ stima quanto le onde atmosferiche trasportano calore verso nord nella bassa stratosfera. Ogni linea è un run/modello distinto; valori positivi indicano trasporto medio verso il polo, ma da soli non dimostrano un riscaldamento stratosferico improvviso. Unità: K·m/s.</p><div id="wave-chart" class="chartbox" style="margin-top:10px;min-height:180px"><div class="chart-empty" style="min-height:160px">In attesa dei dati del run.</div></div><div id="wave-legend" class="legend"></div></article>
+      <article class="panel mini-panel"><h3>Quanti membri prevedono venti orientali?</h3><p>Per ciascun ensemble e scadenza: membri con vento zonale medio U60 negativo a 10 hPa, sul numero di membri effettivamente disponibili. È una frazione del campione, non una probabilità calibrata e non una diagnosi di SSW.</p><div id="odds-table" style="margin-top:12px;color:var(--muted);font-size:12px">In attesa dei dati d’ensemble.</div></article>
     </div>
   </section>
 
