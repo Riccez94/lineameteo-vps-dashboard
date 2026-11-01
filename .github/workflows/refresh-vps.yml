@@ -96,7 +96,7 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          from urllib.request import urlopen
+          from urllib.request import Request, urlopen
           data = json.loads(Path("public/data/dashboard.json").read_text())
           links = sorted({url for model in data.get("models", {}).values()
                           for levels in model.get("maps", {}).values()
@@ -106,7 +106,8 @@ jobs:
           base = f"https://{os.environ['CF_PAGES_PROJECT']}.pages.dev"
           for link in links[:10]:
               url = link if link.startswith("http") else base + link
-              with urlopen(url, timeout=30) as response:
+              request = Request(url, headers={'User-Agent': 'Mozilla/5.0 LineaMeteo-VPS-map-check/1.0'})
+              with urlopen(request, timeout=30) as response:
                   body = response.read(8)
                   if response.status != 200 or body != b"\x89PNG\r\n\x1a\n":
                       raise SystemExit(f"Map verification failed: {url} returned non-PNG content")
