@@ -38,24 +38,24 @@
     if(s.chart==="trend"){let archive=s.data.archive||{},group=s.model==="compare"?which:[which[0]],count=s.runCount;let series=group.flatMap(k=>Object.entries(archive[k]||{}).slice(-count).map(r=>({name:(names[k]||k)+" · "+r[0],color:palette[k],points:r[1].map(p=>({x:p.valid,y:num(p.u10)})).filter(p=>p.y!==null)})));chart($("#strength-chart"),series,"m/s",true)}
     else if(s.chart==="season"){
       const observed=Object.entries(s.data.analysis||{}).map(([x,y])=>({x,y:num(y)})).filter(p=>p.y!==null).sort((a,b)=>Date.parse(a.x)-Date.parse(b.x));
-      const ens=s.data.models?.ecmwf_ens?.series||[],forecast=ens.map(p=>({x:p.valid,y:num(p.u10)})).filter(p=>p.y!==null);
-      chart($("#strength-chart"),[{name:"Analisi IFS",color:"#17354e",points:observed},{name:"ECMWF ENS media",color:"#bd3434",points:forecast}],"m/s",true);
+      const forecasts=modelSeries(which,"u10");
+      chart($("#strength-chart"),[{name:"Analisi IFS",color:"#17354e",points:observed},...forecasts],"m/s",true);
     }
     else chart($("#strength-chart"),modelSeries(which,field),s.chart==="temperature"?"°C":"m/s",s.chart!=="temperature");
-    $("#strength-title").textContent=s.chart==="temperature"?"Temperatura a 10 hPa · media 55–65°N":s.chart==="trend"?"Confronto degli ultimi "+s.runCount+" run archiviati · U60":s.chart==="season"?"Stagione VPS · analisi e previsione d’ensemble":"Vento zonale medio · 60°N · 10 hPa";
-    $("#strength-subtitle").textContent=s.chart==="temperature"?"Temperatura media tra 55° e 65°N a 10 hPa. Sono mostrate solo le previsioni effettivamente disponibili.":s.chart==="trend"?"Confronto delle ultime emissioni archiviate: ogni curva è un run distinto. Le differenze mostrano come è cambiata la previsione.":s.chart==="season"?"Analisi osservata e media d’ensemble, quando disponibili. La linea dello zero separa venti occidentali e orientali.":"Vento zonale medio a 60°N e 10 hPa. Sopra lo zero soffiano venti occidentali; sotto lo zero, venti orientali.";
+    $("#strength-title").textContent=s.chart==="temperature"?"Temperatura a 10 hPa · media 55–65°N":s.chart==="trend"?"Confronto degli ultimi "+s.runCount+" run archiviati · U60":s.chart==="season"?"Andamento stagionale · U60 a 10 hPa":"Vento zonale medio · 60°N · 10 hPa";
+    $("#strength-subtitle").textContent=s.chart==="temperature"?"Temperatura media tra 55° e 65°N a 10 hPa. Sono mostrate solo le previsioni effettivamente disponibili.":s.chart==="trend"?"Confronto delle ultime emissioni archiviate: ogni curva è un run distinto. Le differenze mostrano come è cambiata la previsione.":s.chart==="season"?"Analisi osservata e run selezionati. La linea dello zero separa venti occidentali e orientali; le curve d’ensemble compaiono quando il relativo feed è disponibile.":"Vento zonale medio a 60°N e 10 hPa. Sopra lo zero soffiano venti occidentali; sotto lo zero, venti orientali.";
     let avail=which.filter(k=>s.data.sources?.[k]?.available&&s.data.models?.[k]?.series?.length);$("#strength-freshness").textContent=avail.map(k=>names[k]+" · run "+s.data.sources[k].init).join(" | ")||"Nessun run disponibile per questa scelta: cambia modello o seleziona i run singoli.";
-    let wave=which.flatMap(k=>(s.data.models[k]?.series||[]).filter(p=>num(p.heatFlux100)!==null).map(p=>({x:p.valid,y:num(p.heatFlux100)})));
-    if(wave.length)chart($("#wave-chart"),[{name:"Flusso di calore 100 hPa",color:"#d76b28",points:wave}],"K·m/s",false);
-    else $("#wave-chart").innerHTML='<div class="chart-empty"><div><strong>Flusso non disponibile</strong>Per calcolarlo servono vento meridionale e temperatura alla quota di 100 hPa nel run selezionato.</div></div>';
+    let wave=which.map(k=>({name:names[k],color:colors[k],points:(s.data.models[k]?.series||[]).filter(p=>num(p.heatFlux100)!==null).map(p=>({x:p.valid,y:num(p.heatFlux100)}))})).filter(x=>x.points.length);
+    if(wave.length){chart($("#wave-chart"),wave,"K·m/s",false);$("#wave-legend").innerHTML=wave.map(x=>'<span class="leg"><i class="line-swatch" style="--c:'+x.color+'"></i>'+x.name+'</span>').join("")}
+    else {$("#wave-chart").innerHTML='<div class="chart-empty"><div><strong>Flusso non disponibile</strong>Nei run selezionati mancano i campi necessari per calcolare v′T′ a 100 hPa.</div></div>';$("#wave-legend").innerHTML=""}
   }
   function renderMaps(){
     if(!s.data)return;$$("[data-level]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.level===s.level)));$$("[data-field]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.field===s.mapField)));let sel=$("#map-model").value,which=sel==="compare"?Object.keys(s.data.models||{}):sel==="ifs"?["ecmwf_ifs","ecmwf_ens"]:sel==="aifs"?["aifs","aifs_ens"]:[sel];
-    let step=Math.round(s.step/4)*48,levels=s.level==="both"?[10,50]:[Number(s.level)],imgs=[];
+    let step=Number(s.step)*48,levels=s.level==="both"?[10,50]:[Number(s.level)],imgs=[];
     which.forEach(k=>levels.forEach(l=>{let url=s.data.models?.[k]?.maps?.[String(l)]?.[String(step)]?.[s.mapField];if(url)imgs.push({k:k,l:l,url:url,run:s.data.models[k].init})}));
     $("#map-step-label").textContent=step===0?"Analisi · +0 h":"Giorno "+(step/24)+" · +"+step+" h";
     $("#map-display").innerHTML=imgs.length?imgs.map(a=>'<figure style="margin:0 0 14px"><img src="'+a.url+'" alt="'+(names[a.k]||a.k)+' '+a.l+' hPa '+s.mapField+' +'+step+'h"><figcaption style="padding:6px;font-size:12px;color:var(--muted)"><b>'+(names[a.k]||a.k)+'</b> · '+a.l+' hPa · run '+a.run+' · +'+step+' h</figcaption></figure>').join(""):'<div class="map-placeholder"><div><strong>Mappa non disponibile</strong>Questo run non contiene il campo, livello o passo selezionato.</div></div>';
-    const captions={temp:"Temperatura: scarto dalla media climatica mensile 1991–2020, in °C. Rosso = più mite della media; blu = più freddo.",height:"Altezza geopotenziale: scarto dalla media climatica mensile 1991–2020, in metri. Rosso = valori più alti; blu = più bassi.",vortex:"Geopotenziale assoluto: mostra forma e posizione del vortice polare; non è un’anomalia.",wind:"Vento zonale in m/s: positivo = da ovest; negativo = da est."};
+    const captions={temp:"Temperatura: scarto dalla media mensile NOAA PSL 1991–2020, in °C. Rosso = più mite della media; blu = più freddo.",height:"Altezza geopotenziale: scarto dalla media mensile NOAA PSL 1991–2020, in metri. Le linee mostrano il geopotenziale previsto.",vortex:"Temperatura prevista a colori e linee di altezza geopotenziale: insieme mostrano forma, posizione e struttura del vortice.",wind:"Vento zonale in m/s: valori positivi indicano venti occidentali; negativi, venti orientali."};
     $("#map-caption").textContent=imgs.length+" mappe · "+(captions[s.mapField]||"");
   }
   function renderVertical(){
@@ -113,7 +113,7 @@
   $$("[data-level]").forEach(b=>b.addEventListener("click",()=>{s.level=b.dataset.level;renderMaps()}));
   $$("[data-field]").forEach(b=>b.addEventListener("click",()=>{s.mapField=b.dataset.field;renderMaps()}));
   $("#map-step")?.addEventListener("input",e=>{s.step=Number(e.target.value);renderMaps()});
-  $("#map-play")?.addEventListener("click",()=>{let b=$("#map-play");if(b.dataset.timer){clearInterval(Number(b.dataset.timer));delete b.dataset.timer;b.textContent="▶";return}b.textContent="Ⅱ";b.dataset.timer=String(setInterval(()=>{let r=$("#map-step");r.value=(Number(r.value)+4)%32;r.dispatchEvent(new Event("input"))},1200))});
+  $("#map-play")?.addEventListener("click",()=>{let b=$("#map-play");if(b.dataset.timer){clearInterval(Number(b.dataset.timer));delete b.dataset.timer;b.textContent="▶";return}b.textContent="Ⅱ";b.dataset.timer=String(setInterval(()=>{let r=$("#map-step");r.value=(Number(r.value)+1)%8;r.dispatchEvent(new Event("input"))},1200))});
   $$("[data-vfield]").forEach(b=>b.addEventListener("click",()=>{s.vfield=b.dataset.vfield;renderVertical()}));
   $$("[data-vscale]").forEach(b=>b.addEventListener("click",()=>{ $$("[data-vscale]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));renderVertical()}));
   $$("[data-vmodel]").forEach(b=>b.addEventListener("click",()=>{s.model=b.dataset.vmodel;if(s.model==="gfs")$$("[data-vscale]").forEach(x=>x.setAttribute("aria-pressed",String(x.dataset.vscale==="raw")));else if($$('[data-vscale="raw"]').some(x=>x.getAttribute("aria-pressed")==="true"))$$("[data-vscale]").forEach(x=>x.setAttribute("aria-pressed",String(x.dataset.vscale==="anomaly")));$$("[data-vmodel]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));renderVertical()}));

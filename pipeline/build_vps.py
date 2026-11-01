@@ -149,7 +149,9 @@ def interp_climatology(base: xr.DataArray, target: xr.DataArray, lat: str, lon: 
     right = base.isel(longitude=0).expand_dims(longitude=[float(base.longitude.values[0] + 360)])
     cyclic = xr.concat([left, base, right], dim="longitude").sortby("longitude")
     wrapped_lon = ((target[lon] + 180) % 360) - 180
-    return cyclic.interp(latitude=target[lat], longitude=wrapped_lon, kwargs={"fill_value": "extrapolate"}).values
+    interpolated = cyclic.interp(latitude=target[lat], longitude=wrapped_lon, kwargs={"fill_value": "extrapolate"})
+    # Keep the interpolated field in the same (latitude, longitude) order as GRIB data.
+    return interpolated.transpose(lat, lon).values
 
 
 def u60(da: xr.DataArray) -> float:
@@ -185,25 +187,35 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
     zname = var_name(ds, ("gh", "z", "hgt"))
     tname = var_name(ds, ("t", "tmp"))
     uname = var_name(ds, ("u", "u_grd"))
-    if zname is None and field != "wind":
+    if field in ("vortex", "height") and zname is None:
         return None
-    if field == "temp" and tname is None:
+    if field in ("vortex", "temp") and tname is None:
         return None
     if field == "wind" and uname is None:
         return None
-    chosen = {"vortex": zname, "height": zname, "temp": tname, "wind": uname}[field]
+    chosen = {"vortex": tname, "height": zname, "temp": tname, "wind": uname}[field]
     assert chosen
     da = polar_cap(pressure(ds, level)[chosen]).squeeze()
     lat = coord(da.to_dataset(name="x"), ("latitude", "lat"))
     lon = coord(da.to_dataset(name="x"), ("longitude", "lon"))
     lonv, latv = np.meshgrid(da[lon].values, da[lat].values)
-    values = da.values
+    da = da.transpose(lat, lon)
+    values = da.values.astype(float)
+    zvalues = None
+    if field in ("vortex", "height"):
+        zda = polar_cap(pressure(ds, level)[zname]).squeeze().transpose(lat, lon)
+        zvalues = zda.values.astype(float)
+        units = str(zda.attrs.get("units", ""))
+        if units in ("m**2 s**-2", "m^2 s^-2") or (zname == "z" and np.nanmedian(np.abs(zvalues)) > 10000):
+            zvalues = zvalues / 9.80665
     valid = dt.datetime.fromisoformat(init.replace("Z", "+00:00")) + dt.timedelta(hours=step)
     if field in ("vortex", "height") and zname in ("z", "gh"):
         # ECMWF geopotential is m² s⁻²; convert to geopotential metres where needed.
         units = str(da.attrs.get("units", ""))
         if units in ("m**2 s**-2", "m^2 s^-2") or (zname == "z" and np.nanmedian(np.abs(values)) > 10000):
             values = values / 9.80665
+    if field in ("vortex", "temp"):
+        values = values - 273.15
     if field in ("temp", "height"):
         base = climatology_field("air" if field == "temp" else "hgt", valid.month, level)
         if base is None:
@@ -224,21 +236,24 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
         gl.xlabel_style = {"size": 7}; gl.ylabel_style = {"size": 7}
         if field == "temp":
             cf = ax.contourf(lonv, latv, values, levels=np.arange(-30, 31, 3), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
-            fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Anomalia T (K) · NCEP/NCAR 1991–2020")
+            fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Anomalia di temperatura (°C) · NOAA PSL 1991–2020")
         elif field == "wind":
             cf = ax.contourf(lonv, latv, values, levels=np.arange(-60, 66, 6), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
             fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Vento zonale u (m/s)")
         elif field == "vortex":
             lo = float(np.nanpercentile(values, 5)); hi = float(np.nanpercentile(values, 95))
-            cf = ax.contourf(lonv, latv, values, levels=np.linspace(lo, hi, 19), cmap="Spectral_r", extend="both", transform=ccrs.PlateCarree())
-            fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Geopotenziale assoluto (m)")
-            ax.contour(lonv, latv, values, colors="#263a4a", linewidths=.55, levels=14, transform=ccrs.PlateCarree())
+            cf = ax.contourf(lonv, latv, values, levels=np.linspace(lo, hi, 19), cmap="RdYlBu_r", extend="both", transform=ccrs.PlateCarree())
+            fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Temperatura (°C)")
+            zlevels = np.arange(np.floor(np.nanmin(zvalues) / 500) * 500, np.ceil(np.nanmax(zvalues) / 500) * 500 + 1, 500)
+            contours = ax.contour(lonv, latv, zvalues, colors="#263a4a", linewidths=.65, levels=zlevels, transform=ccrs.PlateCarree())
+            ax.clabel(contours, inline=True, fontsize=7, fmt="%d")
         else:
             cf = ax.contourf(lonv, latv, values, levels=np.arange(-1200, 1201, 100), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
-            fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Anomalia Z (m) · NCEP/NCAR 1991–2020")
-            ax.contour(lonv, latv, values, colors="#263a4a", linewidths=.55, levels=14, transform=ccrs.PlateCarree())
+            fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Anomalia di altezza geopotenziale (m) · NOAA PSL 1991–2020")
+            zlevels = np.arange(np.floor(np.nanmin(zvalues) / 500) * 500, np.ceil(np.nanmax(zvalues) / 500) * 500 + 1, 500)
+            ax.contour(lonv, latv, zvalues, colors="#263a4a", linewidths=.55, levels=zlevels, transform=ccrs.PlateCarree())
         ax.set_title(f"LineaMeteo · {model.replace('_', ' ').upper()} · {level} hPa · {field.upper()}\nRun {init} · validità {valid:%Y-%m-%d %H} UTC · +{step} h", loc="left", fontsize=11, fontweight="bold", pad=11)
-        baseline = "baseline anomalia: NOAA PSL NCEP/NCAR Reanalysis 1, 1991–2020" if field in ("temp", "height") else "campo del modello"
+        baseline = "anomalia rispetto alla media mensile NOAA PSL 1991–2020" if field in ("temp", "height") else "campi del modello"
         fig.text(.08, .015, f"Modello: run in testata · {baseline} · plot LineaMeteo", fontsize=7, color="#52697a")
         fig.savefig(out, bbox_inches="tight", facecolor="white")
     finally:
@@ -264,10 +279,10 @@ def save_model_step(ds: xr.Dataset, model: str, init: str, step: int, out: dict,
                 if normal is not None: rec[f"u{level}anom"] = current - normal
                 if sd not in (None, 0): rec[f"u{level}sigma"] = (current - normal) / sd
             if t_name:
-                current_k = cap_mean(levds[t_name]); rec[f"t{level}"] = current_k - 273.15
+                current_c = cap_mean(levds[t_name]) - 273.15; rec[f"t{level}"] = current_c
                 normal = climatology_cap("air", valid.month, level); sd = climatology_cap("air", valid.month, level, "std")
-                if normal is not None: rec[f"t{level}anom"] = current_k - normal
-                if normal is not None and sd not in (None, 0): rec[f"t{level}sigma"] = (current_k - normal) / sd
+                if normal is not None: rec[f"t{level}anom"] = current_c - normal
+                if normal is not None and sd not in (None, 0): rec[f"t{level}sigma"] = (current_c - normal) / sd
             if z_name:
                 z = cap_mean(levds[z_name])
                 z = z / 9.80665 if z_name in ("z", "gh") else z
