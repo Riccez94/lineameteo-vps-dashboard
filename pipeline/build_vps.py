@@ -256,8 +256,15 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
     values = da.values.astype(float)
     zvalues = None
     if field in ("vortex", "height"):
-        zda = polar_cap(pressure(ds, level)[zname]).squeeze().transpose(lat, lon)
-        zvalues = geopotential_height(zda, zname).values.astype(float)
+        zda = polar_cap(pressure(ds, level)[zname]).squeeze()
+        zlat = coord(zda.to_dataset(name="x"), ("latitude", "lat"))
+        zlon = coord(zda.to_dataset(name="x"), ("longitude", "lon"))
+        if (not np.array_equal(zda[zlat].values, da[lat].values)
+                or not np.array_equal(zda[zlon].values, da[lon].values)):
+            raise ValueError("Temperatura e geopotenziale non condividono la stessa griglia; carta combinata omessa")
+        zvalues = geopotential_height(zda.transpose(zlat, zlon), zname).values.astype(float)
+        if zvalues.shape != values.shape:
+            raise ValueError("Griglia del geopotenziale non allineata con il campo cartografico")
         if field == "height":
             values = zvalues
     valid = dt.datetime.fromisoformat(init.replace("Z", "+00:00")) + dt.timedelta(hours=step)
@@ -276,7 +283,8 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
     try:
         import cartopy.crs as ccrs
         import cartopy.feature as cfeature
-        ax = fig.add_axes([.055, .17, .89, .72], projection=ccrs.NorthPolarStereo())
+        # Reserve a real header band: the previous axes touched the run metadata.
+        ax = fig.add_axes([.055, .17, .89, .68], projection=ccrs.NorthPolarStereo())
         ax.set_extent([-180, 180, 20, 90], ccrs.PlateCarree())
         ax.add_feature(cfeature.COASTLINE.with_scale("110m"), linewidth=.65, edgecolor="#294457", zorder=4)
         ax.add_feature(cfeature.BORDERS.with_scale("110m"), linewidth=.3, edgecolor="#667d8d", zorder=4)
@@ -291,13 +299,18 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
             cax = fig.add_axes([.20, .12, .60, .022])
             fig.colorbar(cf, cax=cax, orientation="horizontal", label="Vento zonale · m/s")
         elif field == "vortex":
-            lo = float(np.nanpercentile(values, 5)); hi = float(np.nanpercentile(values, 95))
-            cf = ax.contourf(lonv, latv, values, levels=np.linspace(lo, hi, 19), cmap="RdYlBu_r", extend="both", transform=ccrs.PlateCarree())
+            # A fixed scale keeps the same colour meaning across forecast frames and models.
+            vortex_levels = np.arange(-90, -19, 5)
+            cf = ax.contourf(lonv, latv, values, levels=vortex_levels, cmap="RdYlBu_r", extend="both", transform=ccrs.PlateCarree())
             cax = fig.add_axes([.20, .12, .60, .022])
-            fig.colorbar(cf, cax=cax, orientation="horizontal", label="Temperatura prevista · °C")
+            fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=np.arange(-90, -19, 10), label="Temperatura · °C")
             zlevels = np.arange(np.floor(np.nanmin(zvalues) / 500) * 500, np.ceil(np.nanmax(zvalues) / 500) * 500 + 1, 500)
-            contours = ax.contour(lonv, latv, zvalues, colors="#263a4a", linewidths=.7, levels=zlevels, transform=ccrs.PlateCarree())
-            ax.clabel(contours, inline=True, fontsize=7, fmt="%d m")
+            ax.contour(lonv, latv, zvalues, colors="white", linewidths=1.25, levels=zlevels, transform=ccrs.PlateCarree(), zorder=3)
+            contours = ax.contour(lonv, latv, zvalues, colors="#20384b", linewidths=.65, levels=zlevels, transform=ccrs.PlateCarree(), zorder=3.2)
+            labels = ax.clabel(contours, inline=True, fontsize=7, fmt="%d m", inline_spacing=5)
+            import matplotlib.patheffects as path_effects
+            for label in labels:
+                label.set_path_effects([path_effects.Stroke(linewidth=2, foreground="white"), path_effects.Normal()])
         else:
             cf = ax.contourf(lonv, latv, values, levels=np.arange(-1200, 1201, 100), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
             cax = fig.add_axes([.20, .12, .60, .022])
@@ -311,14 +324,15 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
         fig.text(.08, .925, f"{field_titles[field]}  ·  {level} hPa", color="#17354e", fontsize=14, fontweight="bold", va="top")
         fig.text(.08, .888, f"{model.replace('_', ' ').upper()}  ·  run {init}  ·  valida {valid:%d/%m/%Y %H} UTC  ·  scadenza +{step} h",
                  color="#52697a", fontsize=9, va="top")
+        timing = "nell’analisi" if step == 0 else "nella previsione"
         if field == "vortex":
-            explanation = "Colori: temperatura prevista (°C)  ·  linee: geopotenziale previsto (m; intervallo 500 m)"
+            explanation = f"Colori: temperatura {timing} (°C; scala fissa da −90 a −20 °C)  ·  linee: geopotenziale {timing} (m; intervallo 500 m)"
         elif field == "temp":
-            explanation = "Colori: scarto della temperatura dalla media mensile NOAA PSL 1991–2020  ·  rosso sopra la media, blu sotto"
+            explanation = f"Colori: scarto della temperatura dalla media mensile NOAA PSL 1991–2020 {timing} (°C)  ·  rosso sopra la media, blu sotto"
         elif field == "height":
-            explanation = "Colori: scarto del geopotenziale dalla media mensile NOAA PSL 1991–2020  ·  linee: geopotenziale previsto (m)"
+            explanation = f"Colori: scarto del geopotenziale dalla media mensile NOAA PSL 1991–2020 {timing} (m)  ·  linee: geopotenziale {timing} (m)"
         else:
-            explanation = "Colori: vento zonale (m/s)  ·  rosso/positivo = da ovest verso est, blu/negativo = da est verso ovest"
+            explanation = f"Colori: vento zonale {timing} (m/s)  ·  rosso/positivo = da ovest verso est, blu/negativo = da est verso ovest"
         if field in ("vortex", "height"):
             explanation += "  ·  isolinee ogni 500 m"
         fig.text(.08, .065, explanation, color="#17354e", fontsize=8, fontweight="medium", va="center", wrap=True)
@@ -638,9 +652,15 @@ def main() -> None:
                                           "init": previous_model.get("init"), "status": "stale",
                                           "expectedInit": expected_iso, "error": "Il nuovo run non contiene campioni U60 utilizzabili; mantenuto il run precedente."}
             else:
-                out["sources"][model] = {"available": bool(candidate.get("series")), "init": candidate.get("init"),
-                                          "status": "current" if candidate.get("init") == expected_iso else "stale",
-                                          "expectedInit": expected_iso, "error": None if candidate.get("init") == expected_iso else "Il feed non ha ancora pubblicato il run atteso.",
+                has_series = bool(candidate.get("series"))
+                is_expected = candidate.get("init") == expected_iso
+                source_status = "current" if is_expected and has_series else "partial" if is_expected else "stale"
+                source_error = (None if has_series and is_expected else
+                                "Il run atteso è presente, ma non contiene una serie U60 utilizzabile." if is_expected else
+                                "Il feed non ha ancora pubblicato il run atteso.")
+                out["sources"][model] = {"available": has_series, "init": candidate.get("init"),
+                                          "status": source_status,
+                                          "expectedInit": expected_iso, "error": source_error,
                                           "attribution": "ECMWF Open Data" if model.startswith(("ecmwf", "aifs")) else "NOAA/NCEP public model data"}
         except Exception as e:
             LOG.exception("Model job failed: %s", model)
@@ -657,11 +677,12 @@ def main() -> None:
     merge_archive(out)
     out["verification"] = build_verification(out)
     out["generatedAt"] = utcnow().isoformat()
-    statuses = [out["sources"].get(model, {}).get("status", "unavailable") for model, _ in jobs]
-    out["updateStatus"] = {"state": "ok" if all(status == "current" for status in statuses) else "partial",
-                           "completedAt": out["generatedAt"], "currentModels": statuses.count("current"),
-                           "modelCount": len(jobs), "staleModels": [model for model, _ in jobs if out["sources"].get(model, {}).get("status") == "stale"],
-                           "unavailableModels": [model for model, _ in jobs if out["sources"].get(model, {}).get("status") == "unavailable"]}
+    statuses = {model: out["sources"].get(model, {}).get("status", "unavailable") for model, _ in jobs}
+    out["updateStatus"] = {"state": "ok" if all(status == "current" for status in statuses.values()) else "partial",
+                           "completedAt": out["generatedAt"], "currentModels": sum(status == "current" for status in statuses.values()),
+                           "modelCount": len(jobs), "partialModels": [model for model, status in statuses.items() if status == "partial"],
+                           "staleModels": [model for model, status in statuses.items() if status == "stale"],
+                           "unavailableModels": [model for model, status in statuses.items() if status == "unavailable"]}
     target = DATA / "dashboard.json"
     temp_target = target.with_suffix(".json.tmp")
     temp_target.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), "utf-8")
