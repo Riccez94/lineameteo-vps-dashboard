@@ -279,12 +279,13 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
         values = values - interp_climatology(base, da, lat, lon)
     MAPS.mkdir(parents=True, exist_ok=True)
     out = MAPS / f"{model}_{level}hpa_{field}_{step:03d}.png"
-    fig = plt.figure(figsize=(9.3, 8.0), dpi=150, facecolor="white")
+    # Keep map, colour scale, explanation and source in separate, readable bands.
+    fig = plt.figure(figsize=(9.3, 8.4), dpi=150, facecolor="white")
     try:
         import cartopy.crs as ccrs
         import cartopy.feature as cfeature
         # Reserve a real header band: the previous axes touched the run metadata.
-        ax = fig.add_axes([.055, .17, .89, .68], projection=ccrs.NorthPolarStereo())
+        ax = fig.add_axes([.055, .205, .89, .64], projection=ccrs.NorthPolarStereo())
         ax.set_extent([-180, 180, 20, 90], ccrs.PlateCarree())
         ax.add_feature(cfeature.COASTLINE.with_scale("110m"), linewidth=.65, edgecolor="#294457", zorder=4)
         ax.add_feature(cfeature.BORDERS.with_scale("110m"), linewidth=.3, edgecolor="#667d8d", zorder=4)
@@ -292,18 +293,18 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
         gl.xlabel_style = {"size": 7}; gl.ylabel_style = {"size": 7}
         if field == "temp":
             cf = ax.contourf(lonv, latv, values, levels=np.arange(-30, 31, 3), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
-            cax = fig.add_axes([.20, .12, .60, .022])
-            fig.colorbar(cf, cax=cax, orientation="horizontal", label="Scarto dalla media · °C")
+            cax = fig.add_axes([.20, .145, .60, .022])
+            fig.colorbar(cf, cax=cax, orientation="horizontal")
         elif field == "wind":
             cf = ax.contourf(lonv, latv, values, levels=np.arange(-60, 66, 6), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
-            cax = fig.add_axes([.20, .12, .60, .022])
-            fig.colorbar(cf, cax=cax, orientation="horizontal", label="Vento zonale · m/s")
+            cax = fig.add_axes([.20, .145, .60, .022])
+            fig.colorbar(cf, cax=cax, orientation="horizontal")
         elif field == "vortex":
             # A fixed scale keeps the same colour meaning across forecast frames and models.
             vortex_levels = np.arange(-90, -19, 5)
             cf = ax.contourf(lonv, latv, values, levels=vortex_levels, cmap="RdYlBu_r", extend="both", transform=ccrs.PlateCarree())
-            cax = fig.add_axes([.20, .12, .60, .022])
-            fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=np.arange(-90, -19, 10), label="Temperatura · °C")
+            cax = fig.add_axes([.20, .145, .60, .022])
+            fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=np.arange(-90, -19, 10))
             zlevels = np.arange(np.floor(np.nanmin(zvalues) / 500) * 500, np.ceil(np.nanmax(zvalues) / 500) * 500 + 1, 500)
             ax.contour(lonv, latv, zvalues, colors="white", linewidths=1.25, levels=zlevels, transform=ccrs.PlateCarree(), zorder=3)
             contours = ax.contour(lonv, latv, zvalues, colors="#20384b", linewidths=.65, levels=zlevels, transform=ccrs.PlateCarree(), zorder=3.2)
@@ -313,8 +314,8 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
                 label.set_path_effects([path_effects.Stroke(linewidth=2, foreground="white"), path_effects.Normal()])
         else:
             cf = ax.contourf(lonv, latv, values, levels=np.arange(-1200, 1201, 100), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
-            cax = fig.add_axes([.20, .12, .60, .022])
-            fig.colorbar(cf, cax=cax, orientation="horizontal", label="Scarto dalla media · m")
+            cax = fig.add_axes([.20, .145, .60, .022])
+            fig.colorbar(cf, cax=cax, orientation="horizontal")
             zlevels = np.arange(np.floor(np.nanmin(zvalues) / 500) * 500, np.ceil(np.nanmax(zvalues) / 500) * 500 + 1, 500)
             contours = ax.contour(lonv, latv, zvalues, colors="#263a4a", linewidths=.6, levels=zlevels, transform=ccrs.PlateCarree())
             ax.clabel(contours, inline=True, fontsize=6, fmt="%d m")
@@ -335,8 +336,8 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
             explanation = f"Colori: vento zonale {timing} (m/s)  ·  rosso/positivo = da ovest verso est, blu/negativo = da est verso ovest"
         if field in ("vortex", "height"):
             explanation += "  ·  isolinee ogni 500 m"
-        fig.text(.08, .065, explanation, color="#17354e", fontsize=8, fontweight="medium", va="center", wrap=True)
-        fig.text(.08, .025, "Area rappresentata: emisfero nord da 20°N al Polo  ·  Grafica LineaMeteo  ·  Fonte: " +
+        fig.text(.08, .078, explanation, color="#17354e", fontsize=7.5, fontweight="medium", va="center", wrap=True)
+        fig.text(.08, .028, "Area rappresentata: emisfero nord da 20°N al Polo  ·  Grafica LineaMeteo  ·  Fonte: " +
                  ("ECMWF Open Data" if model.startswith(("ecmwf", "aifs")) else "NOAA/NCEP"),
                  color="#667d8d", fontsize=7, va="center")
         fig.savefig(out, bbox_inches="tight", facecolor="white")

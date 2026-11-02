@@ -32,6 +32,19 @@
 #strength-controls .seg{gap:2px;padding:3px}
 #strength-controls .seg button{padding:6px 8px;font-size:11px;white-space:nowrap}
 #strength-controls [data-run-count]{padding:5px 7px;font-size:10px}
+.status-card{padding:11px 13px;min-height:0}
+.status-card .status-value{font-size:19px;margin:6px 0 3px}
+.status-card .status-detail{font-size:12px;line-height:1.35}
+.status-card .status-note{font-size:10px;margin-top:4px}
+.status-card .meter{margin:7px 0 5px}
+.status-more{margin-top:6px;border-top:1px solid #dbe5ed;padding-top:5px}
+.status-more summary{cursor:pointer;color:var(--blue);font-size:10px;font-weight:750}
+.status-more .status-list{margin-top:5px}
+.prob-table th,.prob-table td{padding:5px 4px;border-bottom:1px solid #e6edf2;text-align:right;font-size:10px;white-space:nowrap}
+.prob-table th:first-child,.prob-table td:first-child{text-align:left}
+.chart-empty.compact{min-height:64px;padding:10px 14px}
+.chart-empty.compact strong{font-size:13px;margin-bottom:2px}
+.chart-empty.compact>div{font-size:11px;line-height:1.4}
 @media(max-width:620px){#strength-controls{gap:8px}#strength-controls .seg button{padding:6px 7px;font-size:10px}}
 </style>
 </head>
@@ -45,10 +58,10 @@
   <section class="panel status-panel" aria-label="Stato VPS">
     <div class="panel-head"><span class="eyebrow">Stato del vortice polare</span><span id="updated" class="updated">Aggiornamento: in attesa</span></div>
     <div class="status-grid">
-      <article class="status-card"><div class="status-label">Vento zonale iniziale · 10 hPa · 60°N</div><div id="wind-state" class="status-value">Dati in caricamento</div><div class="meter" aria-hidden="true"><i id="wind-meter"></i></div><div id="wind-value" class="status-detail">U60 in m/s. Valori positivi: venti occidentali; negativi: orientali.</div><div id="status-initial-models" class="status-list" aria-live="polite"></div><div class="status-note">Valore iniziale del run, non osservazione indipendente. Run e validità sono indicati per ciascun modello.</div></article>
-      <article class="status-card"><div class="status-label">Vento previsto · U60 a +10 giorni</div><div id="forecast-state" class="status-value">In attesa dei run</div><div id="forecast-value" class="status-detail">Confronto alla stessa scadenza, 10 hPa e 60°N.</div><div id="status-forecast-models" class="status-list" aria-live="polite"></div><div class="status-note">Run singoli e medie d’ensemble sono etichettati separatamente.</div></article>
-      <article class="status-card"><div class="status-label">Ensemble · U60 sotto zero a +14 giorni</div><div id="ssw-state" class="status-value">Non disponibile</div><div id="ssw-value" class="status-detail">Frazione grezza dei membri con vento orientale; non è una probabilità calibrata di SSW.</div><div id="status-ensemble-models" class="status-list" aria-live="polite"></div></article>
-      <article class="status-card"><div class="status-label">Onde planetarie · v′T′ a 100 hPa</div><div id="wave-state" class="status-value">Non disponibile</div><div id="wave-value" class="status-detail">Prodotto medio tra 45° e 75°N, in K·m/s. Il segno positivo indica trasporto medio verso il polo.</div><div id="status-wave-models" class="status-list" aria-live="polite"></div><div class="status-note">Ogni valore riporta il run e la validità; la disponibilità dipende dai campi pubblicati dal modello.</div></article>
+      <article class="status-card"><div class="status-label">Vento iniziale · 10 hPa · 60°N</div><div id="wind-state" class="status-value">Dati in caricamento</div><div class="meter" aria-hidden="true"><i id="wind-meter"></i></div><div id="wind-value" class="status-detail">U60 in m/s · positivo: occidentale, negativo: orientale.</div><details class="status-more"><summary>Valori per modello</summary><div id="status-initial-models" class="status-list" aria-live="polite"></div></details><div class="status-note">Dato del modello, non osservazione indipendente.</div></article>
+      <article class="status-card"><div class="status-label">Vento previsto · +10 giorni</div><div id="forecast-state" class="status-value">In attesa dei run</div><div id="forecast-value" class="status-detail">U60 a 10 hPa e 60°N; confronta solo la stessa validità.</div><details class="status-more"><summary>Valori per modello</summary><div id="status-forecast-models" class="status-list" aria-live="polite"></div></details></article>
+      <article class="status-card"><div class="status-label">Membri con U60 &lt; 0 · +14 giorni</div><div id="ssw-state" class="status-value">Non disponibile</div><div id="ssw-value" class="status-detail">Quota grezza del campione; non è una probabilità di SSW.</div><details class="status-more"><summary>Dettagli ensemble</summary><div id="status-ensemble-models" class="status-list" aria-live="polite"></div></details></article>
+      <article class="status-card"><div class="status-label">Onde planetarie · v′T′ · 100 hPa</div><div id="wave-state" class="status-value">Non disponibile</div><div id="wave-value" class="status-detail">K·m/s · positivo: trasporto medio verso il polo.</div><details class="status-more"><summary>Valori per modello</summary><div id="status-wave-models" class="status-list" aria-live="polite"></div></details></article>
     </div>
     <details class="help"><summary>Che cosa misurano questi indicatori?</summary><p><b>Vento zonale U60:</b> media del vento da ovest verso est a 60°N e 10 hPa (circa 30 km). Positivo significa venti occidentali; negativo, orientali. <b>Previsione IFS:</b> valore del run deterministico a +240 ore, non media dell’ensemble. <b>Membri sotto zero:</b> conteggio e frazione dei membri che prevedono vento orientale a +336 ore; è una quota grezza riferita a quel campione, non una probabilità calibrata e non basta da sola a diagnosticare un riscaldamento stratosferico improvviso. <b>Flusso v′T′:</b> misura l’attività delle onde planetarie nella bassa stratosfera; un valore positivo indica trasporto medio di calore verso il polo. Nessun indicatore, preso singolarmente, determina il tempo al suolo.</p></details>
   </section>
@@ -79,7 +92,7 @@
   <section id="view-strength" class="view-section" aria-label="Intensità del vortice">
     <div id="strength-controls" class="controls">
       <div class="control"><label>Previsione</label><div class="seg"><button data-forecast="single" aria-pressed="true">Run singoli</button><button data-forecast="ensemble" aria-pressed="false">Ensemble</button></div></div>
-      <div class="control"><label>Grafico</label><div class="seg"><button data-chart="wind" aria-pressed="true">Vento</button><button data-chart="temperature" aria-pressed="false">Temperatura</button><button data-chart="season" aria-pressed="false">Stagione</button><button data-chart="trend" aria-pressed="false">Trend run</button></div></div>
+      <div class="control"><label>Grafico</label><div class="seg"><button data-chart="wind" aria-pressed="true">Vento</button><button data-chart="temperature" aria-pressed="false">Temperatura</button><button data-chart="season" aria-pressed="false">Serie U60</button><button data-chart="trend" aria-pressed="false">Trend run</button></div></div>
       <div class="control"><label>Modello</label><div class="seg"><button data-model="ecmwf" aria-pressed="true">ECMWF</button><button data-model="gfs" aria-pressed="false">GFS</button><button data-model="aifs" aria-pressed="false">AIFS</button><button data-model="compare" aria-pressed="false">Confronto</button></div></div>
       <div class="control"><label>Trend · run recenti</label><div class="seg"><button data-run-count="6" aria-pressed="false">6 run</button><button data-run-count="12" aria-pressed="true">12 run</button></div></div>
     </div>
@@ -90,8 +103,8 @@
       <div id="strength-legend" class="legend"></div>
     </article>
     <div class="grid-two">
-      <article class="panel mini-panel"><h3>Flusso di calore delle onde · 100 hPa</h3><p>Il flusso v′T′ stima quanto le onde atmosferiche trasportano calore verso nord nella bassa stratosfera. Ogni linea è un run/modello distinto; valori positivi indicano trasporto medio verso il polo, ma da soli non dimostrano un riscaldamento stratosferico improvviso. Unità: K·m/s.</p><div id="wave-chart" class="chartbox" style="margin-top:10px;min-height:180px"><div class="chart-empty" style="min-height:160px">In attesa dei dati del run.</div></div><div id="wave-legend" class="legend"></div></article>
-      <article class="panel mini-panel"><h3>Quanti membri prevedono venti orientali?</h3><p>Per ciascun ensemble e scadenza: membri con vento zonale medio U60 negativo a 10 hPa, sul numero di membri effettivamente disponibili. È una frazione del campione, non una probabilità calibrata e non una diagnosi di SSW.</p><div id="odds-table" style="margin-top:12px;color:var(--muted);font-size:12px">In attesa dei dati d’ensemble.</div></article>
+      <article class="panel mini-panel"><h3>Flusso di calore delle onde · 100 hPa</h3><p>v′T′ stima il trasporto medio di calore verso il polo: positivo indica flusso verso nord. Da solo non conferma una SSW. Unità: K·m/s.</p><div id="wave-chart" class="chartbox" style="margin-top:10px;min-height:180px"><div class="chart-empty" style="min-height:160px">In attesa dei dati del run.</div></div><div id="wave-legend" class="legend"></div></article>
+      <article class="panel mini-panel"><h3>Membri con vento orientale</h3><p>Quota dei membri con U60 &lt; 0 a 10 hPa e 60°N. È un conteggio grezzo del campione, non una probabilità calibrata di SSW.</p><div id="odds-table" style="margin-top:12px;color:var(--muted);font-size:12px">In attesa dei dati d’ensemble.</div></article>
     </div>
   </section>
 
