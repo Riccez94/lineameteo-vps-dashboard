@@ -300,11 +300,14 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
             cax = fig.add_axes([.20, .145, .60, .022])
             fig.colorbar(cf, cax=cax, orientation="horizontal")
         elif field == "vortex":
-            # A fixed scale keeps the same colour meaning across forecast frames and models.
-            vortex_levels = np.arange(-90, -19, 5)
-            cf = ax.contourf(lonv, latv, values, levels=vortex_levels, cmap="RdYlBu_r", extend="both", transform=ccrs.PlateCarree())
+            # One fixed absolute-temperature scale at 10 and 50 hPa keeps
+            # colours comparable across models, levels, and forecast times.
+            # The cold-to-warm violet/blue/cyan/green/yellow/red ramp follows
+            # the visual convention used by the reference vortex maps.
+            vortex_levels = np.arange(-90, 11, 5)
+            cf = ax.contourf(lonv, latv, values, levels=vortex_levels, cmap="turbo", extend="both", transform=ccrs.PlateCarree())
             cax = fig.add_axes([.20, .145, .60, .022])
-            fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=np.arange(-90, -19, 10))
+            fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=np.arange(-80, 11, 10))
             zlevels = np.arange(np.floor(np.nanmin(zvalues) / 500) * 500, np.ceil(np.nanmax(zvalues) / 500) * 500 + 1, 500)
             ax.contour(lonv, latv, zvalues, colors="white", linewidths=1.25, levels=zlevels, transform=ccrs.PlateCarree(), zorder=3)
             contours = ax.contour(lonv, latv, zvalues, colors="#20384b", linewidths=.65, levels=zlevels, transform=ccrs.PlateCarree(), zorder=3.2)
@@ -327,7 +330,7 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
                  color="#52697a", fontsize=9, va="top")
         timing = "nell’analisi" if step == 0 else "nella previsione"
         if field == "vortex":
-            explanation = f"Colori: temperatura {timing} (°C; scala fissa da −90 a −20 °C)  ·  linee: geopotenziale {timing} (m; intervallo 500 m)"
+            explanation = f"Colori: temperatura assoluta {timing} (°C; scala fissa −90…+10 °C, freddo viola/blu → mite giallo/rosso)  ·  linee: geopotenziale {timing} (m; intervallo 500 m)"
         elif field == "temp":
             explanation = f"Colori: scarto della temperatura dalla media mensile NOAA PSL 1991–2020 {timing} (°C)  ·  rosso sopra la media, blu sotto"
         elif field == "height":
