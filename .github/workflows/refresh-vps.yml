@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - "pipeline/**"
+      - "public/**"
       - ".github/workflows/refresh-vps.yml"
 
 permissions:
@@ -38,7 +39,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: public/data/climatology.npz
-          key: vps-climatology-ncep-r1-1991-2020-v1
+          key: vps-climatology-ncep-r1-1991-2020-v2
       - name: Install GRIB tools and libraries
         run: |
           sudo apt-get update

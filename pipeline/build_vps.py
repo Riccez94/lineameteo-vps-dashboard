@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import copy
 import json
 import logging
 import os
@@ -27,8 +28,11 @@ ALL_LEVELS = (1000, 925, 850, 700, 500, 300, 200, 150, 100, 70, 50, 30, 10)
 GFS_LEVELS = (1000, 925, 850, 700, 500, 300, 200, 150, 100, 70, 50, 30, 20, 15, 10, 7, 5, 3, 2, 1)
 MAP_STEPS = (0, 48, 96, 144, 192, 240, 288, 336)
 SERIES_STEPS = tuple(range(0, 361, 24))
+METRIC_VERSION = "u60-10hpa-60n-zonalmean-v2"
+DATA_SCHEMA = 3
 LOG = logging.getLogger("vps")
 CLIM: dict[str, xr.Dataset] = {}
+CLIM_CAP: dict[str, dict[str, np.ndarray]] = {}
 
 
 def utcnow() -> dt.datetime:
@@ -110,10 +114,18 @@ def ensure_climatology() -> None:
             arrays = {}
             for key, ds in raw.items():
                 name = key if key in ds.data_vars else next(iter(ds.data_vars))
-                da = ds[name].sel(time=slice("1991-01-01", "2020-12-31"), level=list(ALL_LEVELS), lat=slice(90, 20)).load()
+                da = ds[name].sel(time=slice("1991-01-01", "2020-12-31"), level=list(ALL_LEVELS), lat=slice(90, 20)).sortby("lat").load()
                 arrays[key + "_mean"] = da.groupby("time.month").mean("time").values.astype("float32")
                 arrays[key + "_std"] = da.groupby("time.month").std("time").values.astype("float32")
-            first = raw["air"][next(iter(raw["air"].data_vars))].sel(time=slice("1991-01-01", "1991-01-31"), level=list(ALL_LEVELS), lat=slice(90, 20))
+                if key == "uwnd":
+                    regional = da.interp(lat=60).mean("lon")
+                else:
+                    band = da.where((da.lat >= 55) & (da.lat <= 65), drop=True)
+                    weights = np.cos(np.deg2rad(band.lat))
+                    regional = band.weighted(weights).mean(("lat", "lon"))
+                arrays[key + "_index_mean"] = regional.groupby("time.month").mean("time").values.astype("float32")
+                arrays[key + "_index_std"] = regional.groupby("time.month").std("time").values.astype("float32")
+            first = raw["air"][next(iter(raw["air"].data_vars))].sel(time=slice("1991-01-01", "1991-01-31"), level=list(ALL_LEVELS), lat=slice(90, 20)).sortby("lat")
             arrays["levels"] = first.level.values
             arrays["lat"] = first.lat.values
             arrays["lon"] = first.lon.values
@@ -125,6 +137,7 @@ def ensure_climatology() -> None:
     for key in ("air", "hgt", "uwnd"):
         CLIM[key] = xr.Dataset({"mean": (("month", "level", "lat", "lon"), z[key + "_mean"]),
                                 "std": (("month", "level", "lat", "lon"), z[key + "_std"])}, coords=coords)
+        CLIM_CAP[key] = {"mean": z[key + "_index_mean"], "std": z[key + "_index_std"]}
     LOG.info("Monthly 1991–2020 NCEP/NCAR pressure-level baseline ready")
 
 
@@ -136,11 +149,10 @@ def climatology_field(key: str, month: int, level: int, stat: str = "mean") -> x
 
 
 def climatology_cap(key: str, month: int, level: int, stat: str = "mean") -> float | None:
-    base = climatology_field(key, month, level, stat)
-    if base is None: return None
-    band = base.where((base.latitude >= 55) & (base.latitude <= 65), drop=True)
-    weights = np.cos(np.deg2rad(band.latitude))
-    return float(band.weighted(weights).mean(("latitude", "longitude")).item())
+    regional = CLIM_CAP.get(key)
+    if regional is None or level not in ALL_LEVELS:
+        return None
+    return float(regional[stat][month - 1, ALL_LEVELS.index(level)])
 
 
 def interp_climatology(base: xr.DataArray, target: xr.DataArray, lat: str, lon: str) -> np.ndarray:
@@ -150,16 +162,27 @@ def interp_climatology(base: xr.DataArray, target: xr.DataArray, lat: str, lon: 
     cyclic = xr.concat([left, base, right], dim="longitude").sortby("longitude")
     wrapped_lon = ((target[lon] + 180) % 360) - 180
     interpolated = cyclic.interp(latitude=target[lat], longitude=wrapped_lon, kwargs={"fill_value": "extrapolate"})
-    # Keep the interpolated field in the same (latitude, longitude) order as GRIB data.
+    # GRIB fields may store horizontal dimensions in either order. Keep all
+    # plotted arrays in the explicit (latitude, longitude) order.
     return interpolated.transpose(lat, lon).values
 
 
 def u60(da: xr.DataArray) -> float:
     lat = coord(da.to_dataset(name="x"), ("latitude", "lat"))
     lon = coord(da.to_dataset(name="x"), ("longitude", "lon"))
-    band = da.where((da[lat] >= 55) & (da[lat] <= 65), drop=True)
-    weights = np.cos(np.deg2rad(band[lat]))
-    return float(band.weighted(weights).mean((lat, lon)).compute().item())
+    # The headline metric is the zonal mean at exactly 60°N, matching the
+    # standard stratospheric-vortex index rather than a broad latitude band.
+    at_60n = da.sortby(lat).interp({lat: 60})
+    return float(at_60n.mean(lon).compute().item())
+
+
+def geopotential_height(da: xr.DataArray, name: str) -> xr.DataArray:
+    """Convert geopotential (m²/s²) to height (m); leave height fields in metres."""
+    units = str(da.attrs.get("units", "")).lower().replace("^", "**").replace(" ", "")
+    is_geopotential = "m**2s**-2" in units or "m**2/s**2" in units or "m2s-2" in units
+    if not units and name == "z":
+        is_geopotential = float(abs(da).median().compute()) > 10000
+    return da / 9.80665 if is_geopotential else da
 
 
 def cap_mean(da: xr.DataArray) -> float:
@@ -204,17 +227,12 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
     zvalues = None
     if field in ("vortex", "height"):
         zda = polar_cap(pressure(ds, level)[zname]).squeeze().transpose(lat, lon)
-        zvalues = zda.values.astype(float)
-        units = str(zda.attrs.get("units", ""))
-        if units in ("m**2 s**-2", "m^2 s^-2") or (zname == "z" and np.nanmedian(np.abs(zvalues)) > 10000):
-            zvalues = zvalues / 9.80665
+        zvalues = geopotential_height(zda, zname).values.astype(float)
+        if field == "height":
+            values = zvalues
     valid = dt.datetime.fromisoformat(init.replace("Z", "+00:00")) + dt.timedelta(hours=step)
-    if field in ("vortex", "height") and zname in ("z", "gh"):
-        # ECMWF geopotential is m² s⁻²; convert to geopotential metres where needed.
-        units = str(da.attrs.get("units", ""))
-        if units in ("m**2 s**-2", "m^2 s^-2") or (zname == "z" and np.nanmedian(np.abs(values)) > 10000):
-            values = values / 9.80665
     if field in ("vortex", "temp"):
+        # ECMWF/GRIB temperatures are Kelvin; NOAA PSL air climatology is °C.
         values = values - 273.15
     if field in ("temp", "height"):
         base = climatology_field("air" if field == "temp" else "hgt", valid.month, level)
@@ -224,37 +242,59 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
         values = values - interp_climatology(base, da, lat, lon)
     MAPS.mkdir(parents=True, exist_ok=True)
     out = MAPS / f"{model}_{level}hpa_{field}_{step:03d}.png"
-    fig = plt.figure(figsize=(9.3, 7.6), dpi=135, facecolor="white")
+    fig = plt.figure(figsize=(9.3, 8.0), dpi=150, facecolor="white")
     try:
         import cartopy.crs as ccrs
         import cartopy.feature as cfeature
-        ax = fig.add_subplot(1, 1, 1, projection=ccrs.NorthPolarStereo())
+        ax = fig.add_axes([.055, .17, .89, .72], projection=ccrs.NorthPolarStereo())
         ax.set_extent([-180, 180, 20, 90], ccrs.PlateCarree())
-        ax.add_feature(cfeature.COASTLINE.with_scale("110m"), linewidth=.55, edgecolor="#3f5565")
-        ax.add_feature(cfeature.BORDERS.with_scale("110m"), linewidth=.25, edgecolor="#8998a3")
-        gl = ax.gridlines(crs=ccrs.PlateCarree(), linewidth=.35, color="#9aabb8", alpha=.5, linestyle="--")
+        ax.add_feature(cfeature.COASTLINE.with_scale("110m"), linewidth=.65, edgecolor="#294457", zorder=4)
+        ax.add_feature(cfeature.BORDERS.with_scale("110m"), linewidth=.3, edgecolor="#667d8d", zorder=4)
+        gl = ax.gridlines(crs=ccrs.PlateCarree(), linewidth=.4, color="#71899a", alpha=.45, linestyle="--", zorder=3)
         gl.xlabel_style = {"size": 7}; gl.ylabel_style = {"size": 7}
         if field == "temp":
             cf = ax.contourf(lonv, latv, values, levels=np.arange(-30, 31, 3), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
-            fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Anomalia di temperatura (°C) · NOAA PSL 1991–2020")
+            cax = fig.add_axes([.20, .12, .60, .022])
+            fig.colorbar(cf, cax=cax, orientation="horizontal", label="Scarto dalla media · °C")
         elif field == "wind":
             cf = ax.contourf(lonv, latv, values, levels=np.arange(-60, 66, 6), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
-            fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Vento zonale u (m/s)")
+            cax = fig.add_axes([.20, .12, .60, .022])
+            fig.colorbar(cf, cax=cax, orientation="horizontal", label="Vento zonale · m/s")
         elif field == "vortex":
             lo = float(np.nanpercentile(values, 5)); hi = float(np.nanpercentile(values, 95))
             cf = ax.contourf(lonv, latv, values, levels=np.linspace(lo, hi, 19), cmap="RdYlBu_r", extend="both", transform=ccrs.PlateCarree())
-            fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Temperatura (°C)")
+            cax = fig.add_axes([.20, .12, .60, .022])
+            fig.colorbar(cf, cax=cax, orientation="horizontal", label="Temperatura prevista · °C")
             zlevels = np.arange(np.floor(np.nanmin(zvalues) / 500) * 500, np.ceil(np.nanmax(zvalues) / 500) * 500 + 1, 500)
-            contours = ax.contour(lonv, latv, zvalues, colors="#263a4a", linewidths=.65, levels=zlevels, transform=ccrs.PlateCarree())
-            ax.clabel(contours, inline=True, fontsize=7, fmt="%d")
+            contours = ax.contour(lonv, latv, zvalues, colors="#263a4a", linewidths=.7, levels=zlevels, transform=ccrs.PlateCarree())
+            ax.clabel(contours, inline=True, fontsize=7, fmt="%d m")
         else:
             cf = ax.contourf(lonv, latv, values, levels=np.arange(-1200, 1201, 100), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
-            fig.colorbar(cf, ax=ax, orientation="horizontal", pad=.045, shrink=.8, label="Anomalia di altezza geopotenziale (m) · NOAA PSL 1991–2020")
+            cax = fig.add_axes([.20, .12, .60, .022])
+            fig.colorbar(cf, cax=cax, orientation="horizontal", label="Scarto dalla media · m")
             zlevels = np.arange(np.floor(np.nanmin(zvalues) / 500) * 500, np.ceil(np.nanmax(zvalues) / 500) * 500 + 1, 500)
-            ax.contour(lonv, latv, zvalues, colors="#263a4a", linewidths=.55, levels=zlevels, transform=ccrs.PlateCarree())
-        ax.set_title(f"LineaMeteo · {model.replace('_', ' ').upper()} · {level} hPa · {field.upper()}\nRun {init} · validità {valid:%Y-%m-%d %H} UTC · +{step} h", loc="left", fontsize=11, fontweight="bold", pad=11)
-        baseline = "anomalia rispetto alla media mensile NOAA PSL 1991–2020" if field in ("temp", "height") else "campi del modello"
-        fig.text(.08, .015, f"Modello: run in testata · {baseline} · plot LineaMeteo", fontsize=7, color="#52697a")
+            contours = ax.contour(lonv, latv, zvalues, colors="#263a4a", linewidths=.6, levels=zlevels, transform=ccrs.PlateCarree())
+            ax.clabel(contours, inline=True, fontsize=6, fmt="%d m")
+        field_titles = {"vortex": "Struttura del vortice", "temp": "Anomalia di temperatura",
+                        "height": "Anomalia di geopotenziale", "wind": "Vento zonale"}
+        fig.text(.08, .965, "LINEAMETEO  ·  OSSERVATORIO STRATOSFERICO", color="#075b91", fontsize=9, fontweight="bold", va="top")
+        fig.text(.08, .925, f"{field_titles[field]}  ·  {level} hPa", color="#17354e", fontsize=14, fontweight="bold", va="top")
+        fig.text(.08, .888, f"{model.replace('_', ' ').upper()}  ·  run {init}  ·  valida {valid:%d/%m/%Y %H} UTC  ·  scadenza +{step} h",
+                 color="#52697a", fontsize=9, va="top")
+        if field == "vortex":
+            explanation = "Colori: temperatura prevista (°C)  ·  linee: geopotenziale previsto (m; intervallo 500 m)"
+        elif field == "temp":
+            explanation = "Colori: scarto della temperatura dalla media mensile NOAA PSL 1991–2020  ·  rosso sopra la media, blu sotto"
+        elif field == "height":
+            explanation = "Colori: scarto del geopotenziale dalla media mensile NOAA PSL 1991–2020  ·  linee: geopotenziale previsto (m)"
+        else:
+            explanation = "Colori: vento zonale (m/s)  ·  rosso/positivo = da ovest verso est, blu/negativo = da est verso ovest"
+        if field in ("vortex", "height"):
+            explanation += "  ·  isolinee ogni 500 m"
+        fig.text(.08, .065, explanation, color="#17354e", fontsize=8, fontweight="medium", va="center", wrap=True)
+        fig.text(.08, .025, "Area rappresentata: emisfero nord da 20°N al Polo  ·  Grafica LineaMeteo  ·  Fonte: " +
+                 ("ECMWF Open Data" if model.startswith(("ecmwf", "aifs")) else "NOAA/NCEP"),
+                 color="#667d8d", fontsize=7, va="center")
         fig.savefig(out, bbox_inches="tight", facecolor="white")
     finally:
         plt.close(fig)
@@ -276,20 +316,28 @@ def save_model_step(ds: xr.Dataset, model: str, init: str, step: int, out: dict,
             if u_name:
                 current = u60(levds[u_name]); rec[f"u{level}"] = current
                 normal = climatology_cap("uwnd", valid.month, level); sd = climatology_cap("uwnd", valid.month, level, "std")
-                if normal is not None: rec[f"u{level}anom"] = current - normal
-                if sd not in (None, 0): rec[f"u{level}sigma"] = (current - normal) / sd
+                if normal is not None:
+                    rec[f"u{level}normal"] = normal
+                    rec[f"u{level}anom"] = current - normal
+                if sd is not None: rec[f"u{level}sd"] = sd
+                if normal is not None and sd not in (None, 0): rec[f"u{level}sigma"] = (current - normal) / sd
             if t_name:
                 current_c = cap_mean(levds[t_name]) - 273.15; rec[f"t{level}"] = current_c
                 normal = climatology_cap("air", valid.month, level); sd = climatology_cap("air", valid.month, level, "std")
-                if normal is not None: rec[f"t{level}anom"] = current_c - normal
+                if normal is not None:
+                    rec[f"t{level}normal"] = normal
+                    rec[f"t{level}anom"] = current_c - normal
+                if sd is not None: rec[f"t{level}sd"] = sd
                 if normal is not None and sd not in (None, 0): rec[f"t{level}sigma"] = (current_c - normal) / sd
             if z_name:
-                z = cap_mean(levds[z_name])
-                z = z / 9.80665 if z_name in ("z", "gh") else z
+                z = cap_mean(geopotential_height(levds[z_name], z_name))
                 rec[f"z{level}"] = z
                 normal = climatology_cap("hgt", valid.month, level); sd = climatology_cap("hgt", valid.month, level, "std")
-                if normal is not None: rec[f"z{level}anom"] = z - normal
-                if sd not in (None, 0): rec[f"z{level}sigma"] = (z - normal) / sd
+                if normal is not None:
+                    rec[f"z{level}normal"] = normal
+                    rec[f"z{level}anom"] = z - normal
+                if sd is not None: rec[f"z{level}sd"] = sd
+                if normal is not None and sd not in (None, 0): rec[f"z{level}sigma"] = (z - normal) / sd
             if level == 100 and v_name and t_name: rec["heatFlux100"] = heat_flux(levds[v_name], levds[t_name])
         except Exception as e:
             LOG.warning("%s %shPa metric unavailable at +%sh: %s", model, level, step, e)
@@ -418,10 +466,48 @@ def fetch_aifs_ensemble_odds(init: dt.datetime, out: dict) -> None:
         path.unlink(missing_ok=True)
 
 
+def fetch_ecmwf_ensemble_odds(init: dt.datetime, out: dict) -> None:
+    """Count ECMWF ENS perturbed members with easterly U60 at sampled leads."""
+    from ecmwf.opendata import Client
+    leads = (168, 240, 288, 336)
+    path = DATA / ".ecmwf-ens-u10.grib2"
+    try:
+        Client(source="ecmwf", model="ifs", resol="0p25").retrieve(
+            date=init.strftime("%Y%m%d"), time=int(init.strftime("%H")), stream="enfo", type="pf",
+            step=list(leads), param="u", levelist=10, number=list(range(1, 51)), target=str(path))
+        ds = open_grib(path)
+        try:
+            uname = var_name(ds, ("u", "u_grd"))
+            if not uname: raise RuntimeError("campo U non trovato nell’ensemble ECMWF")
+            rows = []
+            for lead in leads:
+                vals = []
+                for member in range(1, 51):
+                    try: vals.append(u60(ds[uname].sel(step=np.timedelta64(lead, "h"), number=member)))
+                    except Exception: pass
+                rows.append({"leadHours": lead, "members": len(vals), "membersBelowZero": sum(v < 0 for v in vals),
+                             "rawShare": sum(v < 0 for v in vals) / len(vals) if vals else None})
+            out.setdefault("probabilities", {})["ecmwf_ens"] = {"source": "ECMWF ENS", "run": init.strftime("%Y-%m-%dT%H:%MZ"),
+                "sampledLeadsHours": list(leads), "method": "frazione grezza dei membri con U60<0; non probabilità calibrata", "rows": rows}
+        finally: ds.close()
+    except Exception as e:
+        LOG.warning("ECMWF ensemble member fractions unavailable: %s", e)
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def merge_archive(out: dict) -> None:
     history_path = DATA / "history.json"
     try: history = json.loads(history_path.read_text("utf-8")) if history_path.exists() else {"runs": {}}
     except Exception: history = {"runs": {}}
+    if history.get("metricVersion") != METRIC_VERSION:
+        # Historical values used a 55–65°N band and cannot be compared with
+        # the standard U60 index. Preserve them separately, then start a clean
+        # archive so trend and verification plots never mix definitions.
+        legacy = {k: history[k] for k in ("metricVersion", "runs", "analyses", "updated") if k in history}
+        history = {"runs": {}, "analyses": {}, "metricVersion": METRIC_VERSION}
+        if legacy:
+            history["previousMetricArchive"] = legacy
     archive = history.setdefault("runs", {})
     for model, payload in out["models"].items():
         runs = archive.setdefault(model, {})
@@ -474,14 +560,15 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     DATA.mkdir(parents=True, exist_ok=True)
     ensure_climatology()
-    out = {"schema": 1, "generatedAt": utcnow().isoformat(), "models": {}, "sources": {}, "verification": {}, "probabilities": {}}
+    out = {"schema": DATA_SCHEMA, "metricVersion": METRIC_VERSION, "generatedAt": None, "models": {}, "sources": {}, "verification": {}, "probabilities": {}}
     old_path = DATA / "dashboard.json"
     if old_path.exists():
         try:
             previous = json.loads(old_path.read_text("utf-8"))
-            out["models"] = previous.get("models", {})
-            out["sources"] = previous.get("sources", {})
-            out["probabilities"] = previous.get("probabilities", {})
+            if previous.get("schema") == DATA_SCHEMA and previous.get("metricVersion") == METRIC_VERSION:
+                out["models"] = previous.get("models", {})
+                out["sources"] = previous.get("sources", {})
+                out["probabilities"] = previous.get("probabilities", {})
         except Exception:
             LOG.warning("Previous dashboard state could not be loaded")
     now = utcnow()
@@ -498,29 +585,57 @@ def main() -> None:
     ]
     expected = {"ecmwf_ifs": cycle_ifs, "ecmwf_ens": cycle_ifs, "aifs": cycle_aifs, "aifs_ens": cycle_ifs, "gfs": cycle_noaa, "gefs": cycle_noaa}
     for model, task in jobs:
+        previous_model = copy.deepcopy(out["models"].get(model))
+        previous_source = copy.deepcopy(out["sources"].get(model, {}))
         try:
             expected_iso = expected[model].strftime("%Y-%m-%dT%H:%MZ")
-            current_model = out["models"].get(model, {})
+            current_model = previous_model or {}
             if (current_model.get("init") == expected_iso and current_model.get("series")
                     and map_assets_present(current_model)):
                 LOG.info("Keeping existing %s run %s", model, expected_iso)
+                out["sources"][model] = {**previous_source, "available": True, "init": expected_iso,
+                                          "status": "current", "error": None}
                 continue
             if current_model.get("init") == expected_iso and current_model.get("series"):
                 LOG.info("Rebuilding %s run %s because its map PNG files are missing", model, expected_iso)
-            previous_model = out["models"].get(model)
             task()
-            if not out["models"].get(model, {}).get("series") and previous_model:
-                LOG.warning("New %s run unavailable; keeping previous run %s", model, previous_model.get("init"))
+            candidate = out["models"].get(model, {})
+            has_usable_wind = any(p.get("u10") is not None for p in candidate.get("series", []))
+            if not has_usable_wind and previous_model:
+                LOG.warning("New %s run %s has no usable U60 samples; keeping previous run %s", model, expected_iso, previous_model.get("init"))
                 out["models"][model] = previous_model
-            out["sources"][model] = {"available": bool(out["models"].get(model, {}).get("series")), "init": out["models"].get(model, {}).get("init"), "attribution": "ECMWF Open Data" if model.startswith(("ecmwf", "aifs")) else "NOAA/NCEP public model data"}
+                out["sources"][model] = {**previous_source, "available": bool(previous_model.get("series")),
+                                          "init": previous_model.get("init"), "status": "stale",
+                                          "expectedInit": expected_iso, "error": "Il nuovo run non contiene campioni U60 utilizzabili; mantenuto il run precedente."}
+            else:
+                out["sources"][model] = {"available": bool(candidate.get("series")), "init": candidate.get("init"),
+                                          "status": "current" if candidate.get("init") == expected_iso else "stale",
+                                          "expectedInit": expected_iso, "error": None if candidate.get("init") == expected_iso else "Il feed non ha ancora pubblicato il run atteso.",
+                                          "attribution": "ECMWF Open Data" if model.startswith(("ecmwf", "aifs")) else "NOAA/NCEP public model data"}
         except Exception as e:
             LOG.exception("Model job failed: %s", model)
-            if 'previous_model' in locals() and previous_model:
+            if previous_model:
                 out["models"][model] = previous_model
-            out["sources"][model] = {"available": False, "error": str(e)}
+            out["sources"][model] = {**previous_source, "available": bool(previous_model and previous_model.get("series")),
+                                      "init": previous_model.get("init") if previous_model else None,
+                                      "status": "stale" if previous_model else "unavailable",
+                                      "expectedInit": expected[model].strftime("%Y-%m-%dT%H:%MZ"), "error": str(e),
+                                      "attribution": "ECMWF Open Data" if model.startswith(("ecmwf", "aifs")) else "NOAA/NCEP public model data"}
+    expected_ens_run = cycle_ifs.strftime("%Y-%m-%dT%H:%MZ")
+    if out.get("probabilities", {}).get("ecmwf_ens", {}).get("run") != expected_ens_run:
+        fetch_ecmwf_ensemble_odds(cycle_ifs, out)
     merge_archive(out)
     out["verification"] = build_verification(out)
-    (DATA / "dashboard.json").write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), "utf-8")
+    out["generatedAt"] = utcnow().isoformat()
+    statuses = [out["sources"].get(model, {}).get("status", "unavailable") for model, _ in jobs]
+    out["updateStatus"] = {"state": "ok" if all(status == "current" for status in statuses) else "partial",
+                           "completedAt": out["generatedAt"], "currentModels": statuses.count("current"),
+                           "modelCount": len(jobs), "staleModels": [model for model, _ in jobs if out["sources"].get(model, {}).get("status") == "stale"],
+                           "unavailableModels": [model for model, _ in jobs if out["sources"].get(model, {}).get("status") == "unavailable"]}
+    target = DATA / "dashboard.json"
+    temp_target = target.with_suffix(".json.tmp")
+    temp_target.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), "utf-8")
+    temp_target.replace(target)
     cache = DATA / ".grib-cache"
     if cache.exists(): shutil.rmtree(cache, ignore_errors=True)
     LOG.info("Dashboard built: %s models available", sum(x.get("available", False) for x in out["sources"].values()))
