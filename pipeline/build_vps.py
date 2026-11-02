@@ -110,44 +110,58 @@ def ensure_climatology() -> None:
         DATA.mkdir(parents=True, exist_ok=True)
         base = "https://psl.noaa.gov/thredds/dodsC/Datasets/ncep.reanalysis/Monthlies/pressure/"
         sources = {key: base + f"{key}.mon.mean.nc" for key in ("air", "hgt", "uwnd")}
-        raw = {key: xr.open_dataset(url, engine="pydap") for key, url in sources.items()}
-        try:
-            arrays = {}
-            for key, ds in raw.items():
-                # NOAA's OPeNDAP endpoint occasionally drops the long 30-year
-                # transfer mid-response. Retry only the variable that failed,
-                # reopening its connection so successful downloads stay cached
-                # in memory for this build.
-                for attempt in range(4):
-                    try:
-                        name = key if key in ds.data_vars else next(iter(ds.data_vars))
-                        da = ds[name].sel(time=slice("1991-01-01", "2020-12-31"), level=list(ALL_LEVELS), lat=slice(90, 20)).sortby("lat").load()
-                        break
-                    except Exception:
-                        if attempt == 3:
-                            raise
-                        LOG.warning("NOAA climatology download failed for %s (attempt %d/4); reconnecting", key, attempt + 1, exc_info=True)
-                        ds.close()
-                        time.sleep(2 ** attempt)
-                        ds = xr.open_dataset(sources[key], engine="pydap")
-                        raw[key] = ds
-                arrays[key + "_mean"] = da.groupby("time.month").mean("time").values.astype("float32")
-                arrays[key + "_std"] = da.groupby("time.month").std("time").values.astype("float32")
-                if key == "uwnd":
-                    regional = da.interp(lat=60).mean("lon")
-                else:
-                    band = da.where((da.lat >= 55) & (da.lat <= 65), drop=True)
-                    weights = np.cos(np.deg2rad(band.lat))
-                    regional = band.weighted(weights).mean(("lat", "lon"))
-                arrays[key + "_index_mean"] = regional.groupby("time.month").mean("time").values.astype("float32")
-                arrays[key + "_index_std"] = regional.groupby("time.month").std("time").values.astype("float32")
-            first = raw["air"][next(iter(raw["air"].data_vars))].sel(time=slice("1991-01-01", "1991-01-31"), level=list(ALL_LEVELS), lat=slice(90, 20)).sortby("lat")
-            arrays["levels"] = first.level.values
-            arrays["lat"] = first.lat.values
-            arrays["lon"] = first.lon.values
-            np.savez_compressed(path, **arrays)
-        finally:
-            for ds in raw.values(): ds.close()
+        arrays = {}
+        coords = None
+        for key, url in sources.items():
+            ds = xr.open_dataset(url, engine="pydap")
+            try:
+                name = key if key in ds.data_vars else next(iter(ds.data_vars))
+                monthly_fields = [[] for _ in range(12)]
+                monthly_indices = [[] for _ in range(12)]
+                for start_year in range(1991, 2021, 5):
+                    end_year = min(start_year + 4, 2020)
+                    # Five-year requests keep NOAA's OPeNDAP response small;
+                    # a single 30-year transfer was repeatedly cut off.
+                    for attempt in range(4):
+                        try:
+                            chunk = ds[name].sel(
+                                time=slice(f"{start_year}-01-01", f"{end_year}-12-31"),
+                                level=list(ALL_LEVELS), lat=slice(90, 20),
+                            ).sortby("lat").load()
+                            break
+                        except Exception:
+                            if attempt == 3:
+                                raise
+                            LOG.warning("NOAA climatology download failed for %s %d–%d (attempt %d/4); reconnecting",
+                                        key, start_year, end_year, attempt + 1, exc_info=True)
+                            ds.close()
+                            time.sleep(2 ** attempt)
+                            ds = xr.open_dataset(url, engine="pydap")
+                            name = key if key in ds.data_vars else next(iter(ds.data_vars))
+                    if coords is None and key == "air":
+                        coords = {"levels": chunk.level.values, "lat": chunk.lat.values, "lon": chunk.lon.values}
+                    for month in range(1, 13):
+                        field = chunk.where(chunk.time.dt.month == month, drop=True)
+                        if field.sizes.get("time", 0) == 0:
+                            continue
+                        monthly_fields[month - 1].append(field.values.astype("float32"))
+                        if key == "uwnd":
+                            regional = field.interp(lat=60).mean("lon")
+                        else:
+                            band = field.where((field.lat >= 55) & (field.lat <= 65), drop=True)
+                            regional = band.weighted(np.cos(np.deg2rad(band.lat))).mean(("lat", "lon"))
+                        monthly_indices[month - 1].append(regional.values.astype("float32"))
+                    chunk.close()
+                samples = [np.concatenate(month, axis=0) for month in monthly_fields]
+                indices = [np.concatenate(month, axis=0) for month in monthly_indices]
+                arrays[key + "_mean"] = np.stack([sample.mean(axis=0) for sample in samples]).astype("float32")
+                arrays[key + "_std"] = np.stack([sample.std(axis=0) for sample in samples]).astype("float32")
+                arrays[key + "_index_mean"] = np.stack([sample.mean(axis=0) for sample in indices]).astype("float32")
+                arrays[key + "_index_std"] = np.stack([sample.std(axis=0) for sample in indices]).astype("float32")
+            finally:
+                ds.close()
+        arrays.update(coords or {})
+        np.savez_compressed(path, **arrays)
     z = np.load(path)
     coords = {"month": np.arange(1, 13), "level": z["levels"], "lat": z["lat"], "lon": z["lon"]}
     for key in ("air", "hgt", "uwnd"):
