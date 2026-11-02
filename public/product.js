@@ -14,18 +14,31 @@
   function chart(container, series, unit, zero) {
     let pts = series.flatMap(x=>x.points).filter(p=>num(p.y)!==null && Number.isFinite(Date.parse(p.x)));
     if (!pts.length) { container.innerHTML='<div class="chart-empty"><div><strong>Dati non disponibili per questa selezione</strong>Questo modello o tipo di previsione non ha ancora fornito valori utilizzabili. Prova un altro modello o i run singoli.</div></div>';if(container.id==="strength-chart")$("#strength-legend").innerHTML="";return; }
-    let c=document.createElement("canvas"), w=1000,h=330,dpr=window.devicePixelRatio||1;
-    c.width=w*dpr;c.height=h*dpr;c.style.width="100%";c.style.height="auto";container.innerHTML="";container.appendChild(c);
-    let x=c.getContext("2d");x.scale(dpr,dpr);let m={l:65,r:20,t:22,b:42}, vals=pts.map(p=>+p.y),lo=Math.min(...vals,zero?0:Infinity),hi=Math.max(...vals,zero?0:-Infinity),pad=(hi-lo||1)*.12;lo-=pad;hi+=pad;
-    let tx=pts.map(p=>Date.parse(p.x)),x0=Math.min(...tx),x1=Math.max(...tx)||x0+1;
+    let c=document.createElement("canvas"), w=1200,h=420,dpr=Math.min(2,window.devicePixelRatio||1);
+    c.width=w*dpr;c.height=h*dpr;c.style.width="100%";c.style.height="auto";c.tabIndex=0;c.setAttribute("role","img");c.setAttribute("aria-label","Grafico interattivo, valori in "+unit+". Passa il puntatore o seleziona il grafico per leggere i dati.");container.innerHTML="";container.style.position="relative";container.appendChild(c);
+    let x=c.getContext("2d");x.scale(dpr,dpr);let m={l:78,r:24,t:24,b:48}, vals=pts.map(p=>+p.y),lo=Math.min(...vals,zero?0:Infinity),hi=Math.max(...vals,zero?0:-Infinity),pad=(hi-lo||1)*.12;lo-=pad;hi+=pad;
+    let tx=pts.map(p=>Date.parse(p.x)),x0=Math.min(...tx),x1=Math.max(...tx);if(x1===x0)x1=x0+24*3600000;
     let X=v=>m.l+(Date.parse(v)-x0)/(x1-x0)*(w-m.l-m.r),Y=v=>m.t+(hi-v)/(hi-lo)*(h-m.t-m.b);
-    x.font="12px Segoe UI";x.strokeStyle="#e5edf3";x.fillStyle="#617b90";
-    for(let i=0;i<=5;i++){let y=m.t+i*(h-m.t-m.b)/5,v=hi-i*(hi-lo)/5;x.beginPath();x.moveTo(m.l,y);x.lineTo(w-m.r,y);x.stroke();x.fillText(v.toFixed(0),8,y+4)}
+    x.font="13px Segoe UI";x.strokeStyle="#e5edf3";x.fillStyle="#617b90";x.lineWidth=1;
+    const decimals=unit==="°C"?1:0;
+    for(let i=0;i<=5;i++){let y=m.t+i*(h-m.t-m.b)/5,v=hi-i*(hi-lo)/5;x.beginPath();x.moveTo(m.l,y);x.lineTo(w-m.r,y);x.stroke();x.textAlign="right";x.fillText(v.toFixed(decimals),m.l-12,y+4)}
+    x.textAlign="left";
     if(zero&&lo<0&&hi>0){x.strokeStyle="#1c3548";x.beginPath();x.moveTo(m.l,Y(0));x.lineTo(w-m.r,Y(0));x.stroke()}
-    series.forEach(a=>{let p=a.points.filter(q=>num(q.y)!==null);if(p.length<2)return;x.strokeStyle=a.color;x.lineWidth=2.7;x.beginPath();p.forEach((q,i)=>i?x.lineTo(X(q.x),Y(q.y)):x.moveTo(X(q.x),Y(q.y)));x.stroke()});
-    for(let i=0;i<5;i++){let d=new Date(x0+(x1-x0)*i/4);x.fillStyle="#617b90";x.fillText(date(d.toISOString()),m.l+i*(w-m.l-m.r)/4,h-12)}
-    let legend=$("#strength-legend");if(legend&&container.id==="strength-chart"){let unique=[...new Map(series.map(a=>[a.name.split(" · ")[0],a])).values()];legend.innerHTML=unique.map(a=>'<span class="leg"><i class="line-swatch" style="--c:'+a.color+'"></i>'+a.name.split(" · ")[0]+'</span>').join("")}
-    container.setAttribute("aria-label","Grafico "+unit);
+    series.forEach(a=>{
+      const p=a.points.filter(q=>num(q.y)!==null&&Number.isFinite(Date.parse(q.x))).sort((q,r)=>Date.parse(q.x)-Date.parse(r.x));
+      if(!p.length)return;x.strokeStyle=a.color;x.lineWidth=a.name==="Analisi IFS archiviata"?3.5:2.8;x.lineJoin="round";x.lineCap="round";x.setLineDash(a.dash?[7,5]:[]);let segment=[];
+      const flush=()=>{if(segment.length>1){x.beginPath();segment.forEach((q,i)=>i?x.lineTo(X(q.x),Y(q.y)):x.moveTo(X(q.x),Y(q.y)));x.stroke()}segment=[]};
+      p.forEach((q,i)=>{if(i&&Date.parse(q.x)-Date.parse(p[i-1].x)>36*3600000)flush();segment.push(q)});flush();x.setLineDash([]);
+      if(a.markers!==false)p.forEach(q=>{x.beginPath();x.fillStyle=a.color;x.arc(X(q.x),Y(q.y),2.6,0,Math.PI*2);x.fill()});
+    });
+    const rangeHours=(x1-x0)/3600000;
+    for(let i=0;i<5;i++){let d=new Date(x0+(x1-x0)*i/4);x.fillStyle="#617b90";x.textAlign=i===0?"left":i===4?"right":"center";x.fillText(rangeHours<48?dateTime(d.toISOString()):date(d.toISOString()),m.l+i*(w-m.l-m.r)/4,h-12)}
+    x.save();x.translate(17,h/2);x.rotate(-Math.PI/2);x.textAlign="center";x.fillStyle="#17354e";x.fillText(unit,h/2,0);x.restore();x.textAlign="left";
+    let legend=$("#strength-legend");if(legend&&container.id==="strength-chart"){let unique=[...new Map(series.map(a=>[a.name,a])).values()];legend.innerHTML=unique.map(a=>'<span class="leg"><i class="'+(a.dash?'dash-swatch':'line-swatch')+'" style="--c:'+a.color+'"></i>'+a.name+'</span>').join("")}
+    let tooltip=document.createElement("div");tooltip.className="chart-tooltip";tooltip.setAttribute("role","status");tooltip.hidden=true;container.appendChild(tooltip);
+    const showPoint=event=>{const rect=c.getBoundingClientRect(),px=(event.clientX-rect.left)*w/rect.width,py=(event.clientY-rect.top)*h/rect.height;let best=null;series.forEach(a=>a.points.forEach(q=>{if(num(q.y)===null)return;let dx=X(q.x)-px,dy=Y(q.y)-py,d=dx*dx+dy*dy;if(!best||d<best.d)best={a,q,d,dx}}));if(!best||best.d>45*45){tooltip.hidden=true;return}tooltip.textContent=best.a.name+" · "+dateTime(best.q.x)+" · "+fmt(best.q.y)+" "+unit;tooltip.style.left=Math.min(72,Math.max(3,px/w*100))+"%";tooltip.hidden=false};
+    c.addEventListener("pointermove",showPoint);c.addEventListener("pointerleave",()=>{tooltip.hidden=true});c.addEventListener("focus",()=>{const q=pts[0];if(q){tooltip.textContent=dateTime(q.x)+" · "+fmt(q.y)+" "+unit;tooltip.style.left="3%";tooltip.hidden=false}});c.addEventListener("blur",()=>{tooltip.hidden=true});
+    container.setAttribute("aria-label","Grafico interattivo "+unit);
   }
   function modelSeries(which,field) {
     return which.filter(k=>s.data.models?.[k]?.series?.length).map(k=>({name:names[k]||k,color:colors[k],points:s.data.models[k].series.map(p=>({x:p.valid,y:num(p[field])})).filter(p=>p.y!==null)}));
