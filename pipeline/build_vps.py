@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -113,8 +114,23 @@ def ensure_climatology() -> None:
         try:
             arrays = {}
             for key, ds in raw.items():
-                name = key if key in ds.data_vars else next(iter(ds.data_vars))
-                da = ds[name].sel(time=slice("1991-01-01", "2020-12-31"), level=list(ALL_LEVELS), lat=slice(90, 20)).sortby("lat").load()
+                # NOAA's OPeNDAP endpoint occasionally drops the long 30-year
+                # transfer mid-response. Retry only the variable that failed,
+                # reopening its connection so successful downloads stay cached
+                # in memory for this build.
+                for attempt in range(4):
+                    try:
+                        name = key if key in ds.data_vars else next(iter(ds.data_vars))
+                        da = ds[name].sel(time=slice("1991-01-01", "2020-12-31"), level=list(ALL_LEVELS), lat=slice(90, 20)).sortby("lat").load()
+                        break
+                    except Exception:
+                        if attempt == 3:
+                            raise
+                        LOG.warning("NOAA climatology download failed for %s (attempt %d/4); reconnecting", key, attempt + 1, exc_info=True)
+                        ds.close()
+                        time.sleep(2 ** attempt)
+                        ds = xr.open_dataset(sources[key], engine="pydap")
+                        raw[key] = ds
                 arrays[key + "_mean"] = da.groupby("time.month").mean("time").values.astype("float32")
                 arrays[key + "_std"] = da.groupby("time.month").std("time").values.astype("float32")
                 if key == "uwnd":
