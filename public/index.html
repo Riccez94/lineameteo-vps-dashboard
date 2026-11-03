@@ -46,6 +46,7 @@
 .chart-empty.compact strong{font-size:13px;margin-bottom:2px}
 .chart-empty.compact>div{font-size:11px;line-height:1.4}
 @media(max-width:620px){#strength-controls{gap:8px}#strength-controls .seg button{padding:6px 7px;font-size:10px}}
+.live-dot.stale{background:#c83d35;box-shadow:0 0 0 4px #fbe5e3}
 </style>
 </head>
 <body>
@@ -75,14 +76,14 @@
 
   <section id="view-maps" class="view-section hidden" aria-label="Mappe polari">
     <div class="controls map-controls">
-      <div class="control"><label for="map-model">Modello e run disponibile</label><select id="map-model"><option value="ecmwf_ifs">ECMWF IFS · run più recente</option><option value="ecmwf_ens">ECMWF ENS · media ensemble</option><option value="aifs">AIFS · run più recente</option><option value="aifs_ens">AIFS ENS · media ensemble</option><option value="gfs">GFS · run più recente</option><option value="gefs">GEFS · media ensemble</option><option value="compare">Confronto modelli</option></select></div>
+      <div class="control"><label for="map-model">Modello e run disponibile</label><select id="map-model"><option value="ecmwf_ifs">ECMWF IFS · run più recente</option><option value="aifs">AIFS · run più recente</option><option value="gfs">GFS · run più recente</option><option value="compare">Confronto modelli</option></select></div>
       <div class="control"><label>Quota</label><div class="seg"><button data-level="10" aria-pressed="true">10 hPa</button><button data-level="50" aria-pressed="false">50 hPa</button><button data-level="both" aria-pressed="false">Entrambe</button></div></div>
       <div class="control"><label>Campo</label><div class="seg"><button data-field="vortex" aria-pressed="true">Struttura del vortice</button><button data-field="temp" aria-pressed="false">Anomalia temperatura</button><button data-field="height" aria-pressed="false">Anomalia geopotenziale</button><button data-field="wind" aria-pressed="false">Vento zonale</button></div></div>
     </div>
     <div class="freshness"><span class="live-dot"></span><span id="map-freshness">Seleziona il passo previsto con il cursore.</span></div>
     <article class="panel mapbox">
       <div id="map-display" class="map-placeholder" tabindex="0" aria-label="Mappe del vortice polare; usa le frecce sinistra e destra per cambiare scadenza"><div><strong>Mappe VPS</strong><span>In attesa del feed cartografico del run selezionato.</span></div></div>
-      <div class="sliderrow"><button id="map-play" class="playbtn" aria-label="Avvia animazione" aria-pressed="false">▶</button><button id="map-prev" class="stepbtn" aria-label="Scadenza precedente">‹</button><input id="map-step" type="range" min="0" max="7" step="1" value="0" aria-label="Passo di previsione"><button id="map-next" class="stepbtn" aria-label="Scadenza successiva">›</button><output id="map-step-label">Analisi · +0 h</output></div>
+      <div class="sliderrow"><button id="map-play" class="playbtn" aria-label="Avvia animazione" aria-pressed="false">▶</button><button id="map-prev" class="stepbtn" aria-label="Scadenza precedente">‹</button><input id="map-step" type="range" min="0" max="30" step="1" value="0" aria-label="Passo di previsione"><button id="map-next" class="stepbtn" aria-label="Scadenza successiva">›</button><output id="map-step-label">Analisi · +0 h</output></div>
       <div class="tickrow"><span>Ora</span><span>Giorno 2</span><span>Giorno 4</span><span>Giorno 6</span><span>Giorno 8</span><span>Giorno 10</span><span>Giorno 12</span><span>Giorno 14</span></div>
       <div class="map-caption"><span id="map-caption">Mappa non ancora disponibile.</span><span>Vista polare · Nord</span></div>
     </article>

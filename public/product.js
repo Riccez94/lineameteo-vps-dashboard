@@ -56,7 +56,7 @@
     return which.flatMap(k=>{
       const feed=s.data.probabilities?.[k],run=Date.parse(feed?.run||"");
       const points=(feed?.rows||[]).filter(r=>num(r.rawShare)!==null&&Number.isFinite(run)).map(r=>({x:new Date(run+Number(r.leadHours)*3600000).toISOString(),y:100*Number(r.rawShare)}));
-      return points.length? [{name:(names[k]||k)+" · membri con U60<0",color:colors[k]||"#0876ad",points,maxGapHours:96}]:[];
+      return points.length? [{name:(names[k]||k)+" · membri con U60<0",color:colors[k]||"#0876ad",points,maxGapHours:36}]:[];
     });
   }
   function renderStatusSummary(){
@@ -117,31 +117,47 @@
       chart($("#strength-chart"),forecasts.length?[...references,...forecasts]:[],s.chart==="temperature"?"°C":"m/s",s.chart!=="temperature",empty);
     }
     $("#strength-title").textContent=s.kind==="ensemble"&&s.chart==="wind"?"Membri con U60 negativo · 10 hPa · 60°N":s.chart==="temperature"?"Temperatura a 10 hPa · media 55–65°N":s.chart==="trend"?"Ultimi "+s.runCount+" run archiviati · U60":s.chart==="season"?"Serie U60 · analisi e previsioni":"Vento zonale medio · 60°N · 10 hPa";
-    $("#strength-subtitle").textContent=s.kind==="ensemble"&&s.chart==="wind"?"Quota grezza dei membri con vento zonale orientale (U60<0) ai lead +7, +10, +12 e +14 giorni. È una frazione del campione, non una probabilità calibrata di SSW.":s.chart==="temperature"?"Temperatura media tra 55° e 65°N a 10 hPa. Sono mostrate solo le previsioni effettivamente disponibili.":s.chart==="trend"?"Confronto delle ultime emissioni archiviate: ogni curva è un run distinto. Le differenze mostrano come è cambiata la previsione.":s.chart==="season"?"Serie temporale disponibile: analisi archiviate e previsioni fino a circa 15 giorni. Non rappresenta l’intera stagione; la linea dello zero separa venti occidentali e orientali.":"Vento zonale medio a 60°N e 10 hPa. Sopra lo zero soffiano venti occidentali; sotto lo zero, venti orientali.";
+    $("#strength-subtitle").textContent=s.kind==="ensemble"&&s.chart==="wind"?"Frazione grezza dei membri con U60<0: ECMWF ENS e AIFS ENS ogni 24 ore tra +7 e +14 giorni; GEFS ai lead +7, +10, +12 e +14. Non è una probabilità calibrata di SSW.":s.chart==="temperature"?"Temperatura media tra 55° e 65°N a 10 hPa. Sono mostrate solo le previsioni effettivamente disponibili.":s.chart==="trend"?"Confronto delle ultime emissioni archiviate: ogni curva è un run distinto. Le differenze mostrano come è cambiata la previsione.":s.chart==="season"?"Serie temporale disponibile: analisi archiviate e previsioni fino a circa 15 giorni. Non rappresenta l’intera stagione; la linea dello zero separa venti occidentali e orientali.":"Vento zonale medio a 60°N e 10 hPa. Sopra lo zero soffiano venti occidentali; sotto lo zero, venti orientali.";
     if(s.chart==="season"){
       const n=Object.keys(s.data.analysis||{}).length,fc=modelSeries(which,"u10").reduce((sum,a)=>sum+a.points.length,0),latest=Math.max(0,...which.flatMap(k=>(s.data.models?.[k]?.series||[]).map(p=>Number(p.leadHours)||0)));
       $("#strength-subtitle").textContent+=" Archivio: "+n+" analisi; run disponibile fino a +"+Math.round(latest/24)+" giorni; "+fc+" punti di previsione. Non è disponibile un’indicazione affidabile per l’intera stagione.";
     }
-    let avail=which.filter(k=>s.data.sources?.[k]?.available&&s.data.models?.[k]?.series?.length);$("#strength-freshness").textContent=s.kind==="ensemble"&&s.chart==="wind"&&ensembleWindSeries(which).length?"Conteggi membri disponibili ai lead +7, +10, +12 e +14 giorni · dati grezzi del feed ensemble.":avail.map(k=>names[k]+" · "+runDescription(k,s.data.sources[k].init)).join(" | ")||(s.kind==="ensemble"?"Il feed "+which.map(k=>names[k]||k).join(", ")+" non fornisce una serie media utilizzabile a 10 hPa. Il vento ensemble usa i conteggi dei membri quando disponibili.":"Serie non disponibile per "+which.map(k=>names[k]||k).join(", ")+". Il feed del modello non contiene campioni utilizzabili in questa modalità.");
+    let avail=which.filter(k=>s.data.sources?.[k]?.available&&s.data.models?.[k]?.series?.length);$("#strength-freshness").textContent=s.kind==="ensemble"&&s.chart==="wind"&&ensembleWindSeries(which).length?"ECMWF ENS e AIFS ENS: campioni giornalieri +7…+14 giorni; GEFS: +7, +10, +12, +14 · frazioni grezze.":avail.map(k=>names[k]+" · "+runDescription(k,s.data.sources[k].init)).join(" | ")||(s.kind==="ensemble"?"Il feed "+which.map(k=>names[k]||k).join(", ")+" non fornisce una serie media utilizzabile a 10 hPa. Il vento ensemble usa i conteggi dei membri quando disponibili.":"Serie non disponibile per "+which.map(k=>names[k]||k).join(", ")+". Il feed del modello non contiene campioni utilizzabili in questa modalità.");
     let wave=which.map(k=>({name:names[k],color:colors[k],points:(s.data.models[k]?.series||[]).filter(p=>num(p.heatFlux100)!==null).map(p=>({x:p.valid,y:num(p.heatFlux100)}))})).filter(x=>x.points.length);
     if(wave.length){chart($("#wave-chart"),wave,"K·m/s",false);$("#wave-legend").innerHTML=wave.map(x=>'<span class="leg"><i class="line-swatch" style="--c:'+x.color+'"></i>'+x.name+'</span>').join("")}
     else {$("#wave-chart").innerHTML='<div class="chart-empty compact"><div><strong>Flusso non disponibile</strong>'+(s.kind==="ensemble"?"Il feed dei membri selezionato non include ancora una serie di vento e temperatura a 100 hPa per calcolare v′T′.":"Nei run selezionati mancano i campi necessari per calcolare v′T′ a 100 hPa.")+'</div></div>';$("#wave-legend").innerHTML=""}
   }
   function renderMaps(){
-    if(!s.data)return;$$('[data-level]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.level===s.level)));$$('[data-field]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.field===s.mapField)));let sel=$("#map-model").value,which=sel==="compare"?Object.keys(s.data.models||{}):[sel];
-    let step=Number(s.step)*48,levels=s.level==="both"?[10,50]:[Number(s.level)],imgs=[],missing=[];
+    if(!s.data)return;$$('[data-level]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.level===s.level)));$$('[data-field]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.field===s.mapField)));let sel=$("#map-model").value,which=sel==="compare"?["ecmwf_ifs","gfs","aifs"]:[sel];
+    const slider=$("#map-step"),maxLead=$("#map-model").value==="gfs"?384:360;slider.max=String(maxLead/12);if(Number(slider.value)>Number(slider.max))slider.value=slider.max;s.step=Number(slider.value); const ticks=$("#map-model").value==="gfs"?["Ora","Giorno 4","Giorno 8","Giorno 12","Giorno 16"]:["Ora","Giorno 3","Giorno 6","Giorno 9","Giorno 12","Giorno 15"]; $(".tickrow").innerHTML=ticks.map(label=>"<span>"+label+"</span>").join("");
+    let step=Number(s.step)*12,levels=s.level==="both"?[10,50]:[Number(s.level)],imgs=[],missing=[];
     const fieldNames={vortex:"struttura del vortice",temp:"anomalia di temperatura",height:"anomalia di geopotenziale",wind:"vento zonale"};
     const shortDate=v=>new Intl.DateTimeFormat("it-IT",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"UTC"}).format(new Date(v))+" UTC";
-    which.forEach(k=>levels.forEach(l=>{let model=s.data.models?.[k],source=s.data.sources?.[k]||{},url=model?.maps?.[String(l)]?.[String(step)]?.[s.mapField];if(url){let valid=new Date(Date.parse(model.init)+step*3600000).toISOString();imgs.push({k:k,l:l,url:url,run:model.init,valid:valid,status:source.status,expectedInit:source.expectedInit})}else missing.push((names[k]||k)+" · "+l+" hPa")}));
+    // In comparison mode align maps by valid time rather than lead hour: model
+    // runs can start at different cycles. Never present mismatched valid times
+    // as a simultaneous comparison.
+    const anchorModel=s.data.models?.ecmwf_ifs, targetValid=sel==="compare"&&anchorModel?.init
+      ? Date.parse(anchorModel.init)+step*3600000 : null;
+    which.forEach(k=>levels.forEach(l=>{
+      const model=s.data.models?.[k],source=s.data.sources?.[k]||{};
+      let modelStep=step;
+      if(sel==="compare"&&targetValid!=null&&model?.init){
+        const hours=(targetValid-Date.parse(model.init))/3600000;
+        modelStep=Number.isInteger(hours/12)?hours:-1;
+      }
+      const url=modelStep>=0?model?.maps?.[String(l)]?.[String(modelStep)]?.[s.mapField]:null;
+      if(url){let valid=new Date(Date.parse(model.init)+modelStep*3600000).toISOString();imgs.push({k:k,l:l,url:url,run:model.init,valid:valid,step:modelStep,status:source.status,expectedInit:source.expectedInit})}
+      else missing.push((names[k]||k)+" · "+l+" hPa"+(sel==="compare"?" · validità comune non disponibile":""));
+    }));
     let validLead=imgs[0]?.valid||null;
-    $("#map-step-label").textContent=step===0?"Analisi · "+(validLead?shortDate(validLead):"validità non disponibile"):"+"+(step/24)+" giorni · "+(validLead?shortDate(validLead):"validità non disponibile");
+    const leadText=step===0?"Analisi":step<48?"+"+step+" h":"+"+(step/24)+" giorni"; $("#map-step-label").textContent=leadText+" · "+(validLead?shortDate(validLead):"validità non disponibile");
     $("#map-freshness").textContent=imgs.length
       ? "Run visualizzato: "+imgs.map(a=>(names[a.k]||a.k)+" "+shortDate(a.run)+(a.status==="stale"?" (run precedente; atteso "+shortDate(a.expectedInit)+")":"")).join(" · ")+". Scadenza "+(validLead?shortDate(validLead):"non disponibile")+(step===0?" · analisi":" · previsione")
       : "Nessuna carta disponibile per la selezione corrente.";
     const timing=step===0?"nell’analisi":"nella previsione";
-    const captions={temp:"I colori mostrano lo scarto della temperatura dalla media mensile NOAA PSL 1991–2020, in °C. Rosso = aria più mite della media; blu = più fredda.",height:"I colori mostrano lo scarto dell’altezza geopotenziale dalla media NOAA PSL 1991–2020, in metri. Le linee sono il geopotenziale "+timing+", in metri.",vortex:"I colori mostrano la temperatura "+timing+", in °C; le linee uniscono punti con uguale altezza geopotenziale "+timing+", in metri. Insieme descrivono forma e posizione del vortice.",wind:"Il colore indica il vento zonale "+timing+", in m/s: valori positivi corrispondono a venti occidentali, valori negativi a venti orientali."};
+    const captions={temp:"Scarto della temperatura dalla media mensile NOAA PSL 1991–2020, in °C. Blu = più freddo della media; giallo/rosso = più mite. Scala fissa −30…+30 °C.",height:"Scarto del geopotenziale dalla media NOAA PSL 1991–2020, in metri. Blu = altezze più basse; giallo/rosso = più alte. Le linee nere sono il geopotenziale "+timing+" (intervallo 500 m). Scala fissa −1200…+1200 m.",vortex:"Temperatura assoluta "+timing+" (°C; scala fissa per quota: 10 hPa −80…+10 °C, 50 hPa −80…−20 °C). Viola/blu = più freddo; giallo/rosso = più mite. Le linee nere sono il geopotenziale (intervallo 500 m).",wind:"Vento zonale "+timing+", in m/s. Viola/blu = vento orientale (valori negativi); bianco = vicino a zero; verde/giallo/rosso = vento occidentale (valori positivi). Scala fissa −60…+60 m/s."};
     const sourceLine=missing.length?"Carte non disponibili per: "+missing.map(item=>{const k=Object.keys(names).find(key=>item.startsWith(names[key]));const error=k&&s.data.sources?.[k]?.error;return item+(error?" ("+error+")":"")}).join(", ")+". Il feed del run selezionato non contiene il campo, il livello o la scadenza richiesta.":"";
-    const mapMarkup=imgs.map(a=>`<figure class="map-figure" style="margin:0 0 14px"><a href="${a.url}" target="_blank" rel="noopener" aria-label="Apri a piena risoluzione: ${fieldNames[s.mapField]}, ${names[a.k]||a.k}, ${a.l} hPa"><img src="${a.url}" alt="Carta di ${fieldNames[s.mapField]} · ${names[a.k]||a.k} · ${a.l} hPa · validità ${shortDate(a.valid)}"></a><figcaption style="padding:10px 12px;font-size:12px;color:var(--muted);line-height:1.55"><b>${names[a.k]||a.k} · ${a.l} hPa</b><br>Run ${shortDate(a.run)} · validità ${shortDate(a.valid)} · ${step===0?"analisi":"previsione +"+step+" ore"}${a.status==="stale"?" · run precedente; atteso "+shortDate(a.expectedInit):""} · <a href="${a.url}" target="_blank" rel="noopener">Apri carta a piena risoluzione</a></figcaption></figure>`).join("");
+    const mapMarkup=imgs.map(a=>`<figure class="map-figure" style="margin:0 0 14px"><a href="${a.url}" target="_blank" rel="noopener" aria-label="Apri a piena risoluzione: ${fieldNames[s.mapField]}, ${names[a.k]||a.k}, ${a.l} hPa"><img src="${a.url}" alt="Carta di ${fieldNames[s.mapField]} · ${names[a.k]||a.k} · ${a.l} hPa · validità ${shortDate(a.valid)}"></a><figcaption style="padding:10px 12px;font-size:12px;color:var(--muted);line-height:1.55"><b>${names[a.k]||a.k} · ${a.l} hPa</b><br>Run ${shortDate(a.run)} · validità ${shortDate(a.valid)} · ${a.step===0?"analisi":"previsione +"+a.step+" ore"}${a.status==="stale"?" · run precedente; atteso "+shortDate(a.expectedInit):""} · <a href="${a.url}" target="_blank" rel="noopener">Apri carta a piena risoluzione</a></figcaption></figure>`).join("");
     const missingMarkup=sourceLine?`<p class="map-missing" role="status">${sourceLine}</p>`:"";
     const unavailableMarkup=`<div class="map-placeholder"><div><strong>Carta non disponibile</strong><span>Per ${fieldNames[s.mapField]} a ${levels.join(" e ")} hPa · +${step} ore il feed selezionato non contiene dati. Prova un’altra quota, scadenza o modello.</span></div></div>`;
     $("#map-display").innerHTML=imgs.length?mapMarkup+missingMarkup:unavailableMarkup;
@@ -200,6 +216,15 @@
         $("#feed-status").textContent="Aggiornamento completato · serie utilizzabili per "+(update.currentModels??available.filter(([,source])=>source.available).length)+"/"+(update.modelCount??6)+" modelli. Run e validità sono indicati nelle viste.";
         $("#updated").textContent="Aggiornato "+new Date(s.data.generatedAt).toLocaleString("it-IT",{timeZone:"UTC"})+" UTC";
       }
+      const feedAgeHours=(Date.now()-Date.parse(s.data.generatedAt))/3600000;
+      if(Number.isFinite(feedAgeHours)&&feedAgeHours>9){
+        const age=Math.floor(feedAgeHours)+" h";
+        $("#feed-status").textContent="Feed non aggiornato da "+age+". I dati visibili sono quelli dell’ultima elaborazione ("+new Date(s.data.generatedAt).toLocaleString("it-IT",{timeZone:"UTC"})+" UTC); il nuovo controllo automatico non risulta ancora completato.";
+        $("#updated").textContent="Feed fermo da "+age+" · ultimo aggiornamento "+new Date(s.data.generatedAt).toLocaleString("it-IT",{timeZone:"UTC"})+" UTC";
+        $("#runline .live-dot")?.classList.add("stale");
+      }else{
+        $("#runline .live-dot")?.classList.remove("stale");
+      }
       $("#credits").textContent='Fonti: ECMWF Open Data · NOAA/NCEP · NOAA PSL.';
       let primary=s.data.models?.ecmwf_ifs?.series||[],now=primary.find(x=>Number(x.leadHours)===0),future=primary.find(x=>Number(x.leadHours)===240&&x.u10!=null);
       if(now?.u10!=null){$("#wind-state").textContent=now.u10<0?"Venti orientali":"Venti occidentali";let normal=now.u10anom==null?null:now.u10-num(now.u10anom);$("#wind-value").textContent=fmt(now.u10)+" m/s · media climatica 1991–2020 "+fmt(normal)+" m/s · "+date(now.valid);$("#wind-meter").style.setProperty("--pos",Math.max(0,Math.min(100,(now.u10+10)/50*100))+"%")}
@@ -233,7 +258,7 @@
   $("#map-prev")?.addEventListener("click",()=>shiftMapStep(-1));
   $("#map-next")?.addEventListener("click",()=>shiftMapStep(1));
   $("#map-display")?.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"){e.preventDefault();shiftMapStep(-1)}else if(e.key==="ArrowRight"){e.preventDefault();shiftMapStep(1)}});
-  $("#map-play")?.addEventListener("click",()=>{let b=$("#map-play");if(b.dataset.timer){clearInterval(Number(b.dataset.timer));delete b.dataset.timer;b.textContent="▶";b.setAttribute("aria-label","Avvia animazione");b.setAttribute("aria-pressed","false");return}b.textContent="Ⅱ";b.setAttribute("aria-label","Metti in pausa l’animazione");b.setAttribute("aria-pressed","true");b.dataset.timer=String(setInterval(()=>{let r=$("#map-step");r.value=(Number(r.value)+1)%8;r.dispatchEvent(new Event("input"))},1200))});
+  $("#map-play")?.addEventListener("click",()=>{let b=$("#map-play");if(b.dataset.timer){clearInterval(Number(b.dataset.timer));delete b.dataset.timer;b.textContent="▶";b.setAttribute("aria-label","Avvia animazione");b.setAttribute("aria-pressed","false");return}b.textContent="Ⅱ";b.setAttribute("aria-label","Metti in pausa l’animazione");b.setAttribute("aria-pressed","true");b.dataset.timer=String(setInterval(()=>{let r=$("#map-step");r.value=(Number(r.value)+1)%(Number(r.max)+1);r.dispatchEvent(new Event("input"))},1200))});
   $$("[data-vfield]").forEach(b=>b.addEventListener("click",()=>{s.vfield=b.dataset.vfield;renderVertical()}));
   $$("[data-vscale]").forEach(b=>b.addEventListener("click",()=>{ $$("[data-vscale]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));renderVertical()}));
   $$("[data-vmodel]").forEach(b=>b.addEventListener("click",()=>{s.model=b.dataset.vmodel;if(s.model==="gfs")$$("[data-vscale]").forEach(x=>x.setAttribute("aria-pressed",String(x.dataset.vscale==="raw")));else if($$('[data-vscale="raw"]').some(x=>x.getAttribute("aria-pressed")==="true"))$$("[data-vscale]").forEach(x=>x.setAttribute("aria-pressed",String(x.dataset.vscale==="anomaly")));$$("[data-vmodel]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));renderVertical()}));

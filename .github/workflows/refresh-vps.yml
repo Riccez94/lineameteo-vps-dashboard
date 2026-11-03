@@ -47,9 +47,82 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r pipeline/requirements.txt
       - name: Download model data and build dashboard assets
+        env:
+          CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT }}
         run: |
           mkdir -p public/data/maps
+          # Map PNGs are generated assets and intentionally are not committed
+          # to Git. Restore the currently deployed files first so an unchanged
+          # model cycle can be reused instead of downloaded and rendered again.
+          python - <<'PY'
+          import json, os
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          feed = Path("public/data/dashboard.json")
+          project = os.environ.get("CF_PAGES_PROJECT", "").strip()
+          if not feed.exists() or not project:
+              print("No previous map feed or Pages project configured; maps will be built from source data.")
+              raise SystemExit(0)
+          base = f"https://{project}.pages.dev"
+          data = json.loads(feed.read_text(encoding="utf-8"))
+          links = {url for model in data.get("models", {}).values()
+                   for levels in model.get("maps", {}).values()
+                   for steps in levels.values() for url in steps.values()
+                   if isinstance(url, str) and url.startswith("/data/maps/")}
+          def restore(link):
+              filename = Path(link).name
+              if not filename.endswith(".png") or filename in ("", ".", ".."):
+                  return "failed", link, "invalid map filename"
+              target = Path("public/data/maps") / filename
+              if target.is_file():
+                  return "present", link, None
+              try:
+                  request = Request(base + link, headers={"User-Agent": "LineaMeteo-VPS-map-cache/1.0"})
+                  with urlopen(request, timeout=10) as response:
+                      content = response.read()
+                  if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+                      raise ValueError("response is not a PNG")
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(content)
+                  return "restored", link, None
+              except (HTTPError, URLError, TimeoutError, ValueError, OSError) as exc:
+                  return "failed", link, str(exc)
+
+          restored = failed = 0
+          with ThreadPoolExecutor(max_workers=12) as pool:
+              for future in as_completed([pool.submit(restore, link) for link in sorted(links)]):
+                  status, link, error = future.result()
+                  restored += status == "restored"
+                  if status == "failed":
+                      failed += 1
+                      print(f"Previous map could not be restored: {link}: {error}")
+          print(f"Restored {restored} of {len(links)} deployed maps; {failed} unavailable. Missing assets will be rebuilt.")
+          PY
           python pipeline/build_vps.py
+          # Drop restored images from superseded model cycles. Keep exactly the
+          # PNGs linked by the new feed so each deployment stays bounded.
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          data = json.loads(Path("public/data/dashboard.json").read_text(encoding="utf-8"))
+          wanted = {Path(urlsplit(url).path).name
+                    for model in data.get("models", {}).values()
+                    for levels in model.get("maps", {}).values()
+                    for steps in levels.values() for url in steps.values()
+                    if isinstance(url, str) and Path(urlsplit(url).path).name.endswith(".png")}
+          map_dir = Path("public/data/maps")
+          removed = 0
+          for image in map_dir.glob("*.png"):
+              if image.name not in wanted:
+                  image.unlink()
+                  removed += 1
+          print(f"Retained {len(wanted)} referenced maps; removed {removed} superseded images.")
+          PY
       - name: Publish generated dashboard data
         run: |
           git config user.name "github-actions[bot]"

@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import xarray as xr
 
@@ -27,13 +28,37 @@ MODELS = ("ecmwf_ifs", "ecmwf_ens", "aifs", "aifs_ens", "gfs", "gefs")
 LEVELS = (10, 50)
 ALL_LEVELS = (1000, 925, 850, 700, 500, 300, 200, 150, 100, 70, 50, 30, 10)
 GFS_LEVELS = (1000, 925, 850, 700, 500, 300, 200, 150, 100, 70, 50, 30, 20, 15, 10, 7, 5, 3, 2, 1)
-MAP_STEPS = (0, 48, 96, 144, 192, 240, 288, 336)
+MAP_STEPS = tuple(range(0, 361, 12))
+NOAA_MAP_STEPS = tuple(range(0, 385, 12))
 SERIES_STEPS = tuple(range(0, 361, 24))
 METRIC_VERSION = "u60-10hpa-60n-zonalmean-v2"
 DATA_SCHEMA = 3
 LOG = logging.getLogger("vps")
 CLIM: dict[str, xr.Dataset] = {}
 CLIM_CAP: dict[str, dict[str, np.ndarray]] = {}
+
+# Keep each field's colours tied to its physical meaning. Diverging fields are
+# neutral at zero; absolute temperature and signed wind use separate scales.
+TEMP_ANOMALY_CMAP = LinearSegmentedColormap.from_list(
+    "lineameteo_temp_anomaly",
+    ["#174b91", "#3e8fc8", "#a9d7ed", "#d9edf3", "#f8f8f3", "#fff1a8", "#f9a13a", "#dd3f2f", "#8e1233"],
+    N=256,
+)
+HEIGHT_ANOMALY_CMAP = LinearSegmentedColormap.from_list(
+    "lineameteo_height_anomaly",
+    ["#164b87", "#3c8fca", "#acd9e8", "#dceef0", "#f8f8f3", "#fff3a6", "#f9a13a", "#e34227", "#a91025"],
+    N=256,
+)
+VORTEX_TEMP_CMAP = LinearSegmentedColormap.from_list(
+    "lineameteo_vortex_temperature",
+    ["#27216f", "#254da4", "#347fc0", "#72bfdf", "#d8eef2", "#fff6c9", "#ffd66e", "#f78a36", "#d63b2e", "#8f1236"],
+    N=256,
+)
+ZONAL_WIND_CMAP = LinearSegmentedColormap.from_list(
+    "lineameteo_zonal_wind",
+    ["#54206f", "#7e3ca0", "#3e68b2", "#94cbe2", "#f8f8f3", "#d8f0df", "#64c783", "#e6e65a", "#f6a13c", "#db422b", "#8e1534"],
+    N=256,
+)
 
 
 def utcnow() -> dt.datetime:
@@ -52,13 +77,19 @@ def herbie_init(init: dt.datetime) -> dt.datetime:
     return init.astimezone(dt.timezone.utc).replace(tzinfo=None) if init.tzinfo else init
 
 
-def map_assets_present(model_data: dict) -> bool:
+def map_steps_for_model(model: str) -> tuple[int, ...]:
+    return NOAA_MAP_STEPS if model in ("gfs", "gefs") else MAP_STEPS
+
+
+def map_assets_present(model_data: dict, model: str) -> bool:
     """Require every advertised map field, level and lead before reusing a run."""
+    if model not in ("ecmwf_ifs", "aifs", "gfs"):
+        return bool(model_data.get("series"))
     maps = model_data.get("maps", {})
     if not maps:
         return False
     expected_fields = {"vortex", "wind", "temp", "height"}
-    expected_steps = {str(step) for step in MAP_STEPS}
+    expected_steps = {str(step) for step in map_steps_for_model(model)}
     for level in LEVELS:
         steps = maps.get(str(level), {})
         if not expected_steps.issubset(steps):
@@ -278,7 +309,10 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
             return None
         values = values - interp_climatology(base, da, lat, lon)
     MAPS.mkdir(parents=True, exist_ok=True)
-    out = MAPS / f"{model}_{level}hpa_{field}_{step:03d}.png"
+    # Version the URL with the model cycle. Reusing a fixed PNG path lets a
+    # browser or edge cache keep yesterday's map after the JSON feed advances.
+    cycle_tag = dt.datetime.fromisoformat(init.replace("Z", "+00:00")).strftime("%Y%m%dT%H%MZ")
+    out = MAPS / f"{model}_{cycle_tag}_{level}hpa_{field}_{step:03d}.png"
     # Keep map, colour scale, explanation and source in separate, readable bands.
     fig = plt.figure(figsize=(9.3, 8.4), dpi=150, facecolor="white")
     try:
@@ -292,20 +326,22 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
         gl = ax.gridlines(crs=ccrs.PlateCarree(), linewidth=.4, color="#71899a", alpha=.45, linestyle="--", zorder=3)
         gl.xlabel_style = {"size": 7}; gl.ylabel_style = {"size": 7}
         if field == "temp":
-            cf = ax.contourf(lonv, latv, values, levels=np.arange(-30, 31, 3), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
+            cf = ax.contourf(lonv, latv, values, levels=np.arange(-30, 31, 3), cmap=TEMP_ANOMALY_CMAP, extend="both", transform=ccrs.PlateCarree())
             cax = fig.add_axes([.20, .145, .60, .022])
-            fig.colorbar(cf, cax=cax, orientation="horizontal")
+            fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=np.arange(-30, 31, 10))
         elif field == "wind":
-            cf = ax.contourf(lonv, latv, values, levels=np.arange(-60, 66, 6), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
+            # Negative values are easterlies, near-zero values are neutral,
+            # and positive values are westerlies. Preserve that reading in hue.
+            cf = ax.contourf(lonv, latv, values, levels=np.arange(-60, 61, 5), cmap=ZONAL_WIND_CMAP, extend="both", transform=ccrs.PlateCarree())
             cax = fig.add_axes([.20, .145, .60, .022])
-            fig.colorbar(cf, cax=cax, orientation="horizontal")
+            fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=np.arange(-60, 61, 20))
         elif field == "vortex":
             # Keep a fixed scale within each isobaric level, model, and lead.
             # The reference uses -80…+10 °C at 10 hPa and -80…-20 °C at
             # 50 hPa, with the same cold-to-mild spectral colour progression.
             vmin, vmax = (-80, 10) if level == 10 else (-80, -20)
             vortex_levels = np.arange(vmin, vmax + 1, 5)
-            cf = ax.contourf(lonv, latv, values, levels=vortex_levels, cmap="turbo", extend="both", transform=ccrs.PlateCarree())
+            cf = ax.contourf(lonv, latv, values, levels=vortex_levels, cmap=VORTEX_TEMP_CMAP, extend="both", transform=ccrs.PlateCarree())
             cax = fig.add_axes([.20, .145, .60, .022])
             tick_step = 10 if level == 10 else 5
             fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=np.arange(vmin, vmax + 1, tick_step))
@@ -317,9 +353,9 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
             for label in labels:
                 label.set_path_effects([path_effects.Stroke(linewidth=2, foreground="white"), path_effects.Normal()])
         else:
-            cf = ax.contourf(lonv, latv, values, levels=np.arange(-1200, 1201, 100), cmap="RdBu_r", extend="both", transform=ccrs.PlateCarree())
+            cf = ax.contourf(lonv, latv, values, levels=np.arange(-1200, 1201, 100), cmap=HEIGHT_ANOMALY_CMAP, extend="both", transform=ccrs.PlateCarree())
             cax = fig.add_axes([.20, .145, .60, .022])
-            fig.colorbar(cf, cax=cax, orientation="horizontal")
+            fig.colorbar(cf, cax=cax, orientation="horizontal", ticks=np.arange(-1200, 1201, 300))
             zlevels = np.arange(np.floor(np.nanmin(zvalues) / 500) * 500, np.ceil(np.nanmax(zvalues) / 500) * 500 + 1, 500)
             contours = ax.contour(lonv, latv, zvalues, colors="#263a4a", linewidths=.6, levels=zlevels, transform=ccrs.PlateCarree())
             ax.clabel(contours, inline=True, fontsize=6, fmt="%d m")
@@ -393,7 +429,7 @@ def save_model_step(ds: xr.Dataset, model: str, init: str, step: int, out: dict,
             LOG.warning("%s %shPa metric unavailable at +%sh: %s", model, level, step, e)
     if rec.get("u10") is not None:
         model_data["series"].append(rec)
-    if step in MAP_STEPS:
+    if model in ("ecmwf_ifs", "aifs", "gfs") and step in map_steps_for_model(model):
         for level in LEVELS:
             for field in ("vortex", "temp", "height", "wind"):
                 try:
@@ -409,7 +445,7 @@ def fetch_ecmwf(model_key: str, model: str, stream: str, typ: str, init: dt.date
     init_iso = init.strftime("%Y-%m-%dT%H:%MZ")
     out["models"][model_key] = {"init": init_iso, "source": model_key, "series": [], "maps": {}}
     LOG.info("ECMWF %s run %s", model_key, init_iso)
-    steps = sorted(set(SERIES_STEPS) | set(MAP_STEPS))
+    steps = sorted(set(SERIES_STEPS) | set(map_steps_for_model(model_key))) if model_key in ("ecmwf_ifs", "aifs") else SERIES_STEPS
     with tempfile.TemporaryDirectory(prefix="lm-vps-") as tmp:
         for step in steps:
             path = Path(tmp) / f"{model_key}_{step:03d}.grib2"
@@ -431,7 +467,7 @@ def fetch_noaa(model_key: str, noaa_model: str, product: str, member: str | None
     levels = GFS_LEVELS if model_key == "gfs" else ALL_LEVELS
     out["models"][model_key] = {"init": init_iso, "source": model_key, "series": [], "maps": {}}
     LOG.info("NOAA %s run %s", model_key, init_iso)
-    steps = sorted(set(SERIES_STEPS) | set(MAP_STEPS))
+    steps = sorted(set(SERIES_STEPS) | set(map_steps_for_model(model_key))) if model_key == "gfs" else SERIES_STEPS
     for step in steps:
         try:
             kwargs = {"member": member} if member else {}
@@ -453,26 +489,52 @@ def fetch_noaa(model_key: str, noaa_model: str, product: str, member: str | None
 def fetch_gefs_raw_odds(init: dt.datetime, out: dict) -> None:
     """Sample 30 GEFS members at days 7, 10, 12 and 14 for raw U60 reversal shares."""
     from herbie import Herbie
-    init_iso = init.strftime("%Y-%m-%dT%H:%MZ")
+    # NOAA GEFS requires one public-file request per member and lead; keep its
+    # established checkpoints to avoid multiplying hundreds of downloads.
     leads = (168, 240, 288, 336)
-    member_paths: dict[str, dict[int, float]] = {}
-    with tempfile.TemporaryDirectory(prefix="lm-gefs-members-") as tmp:
+    def sample_lead(run: dt.datetime, lead: int, directory: str) -> dict[str, float]:
+        values: dict[str, float] = {}
         for member in range(1, 31):
             key = f"p{member:02d}"
-            member_paths[key] = {}
-            for lead in leads:
+            try:
+                h = Herbie(herbie_init(run), model="gefs", product="atmos.5", member=key, fxx=lead,
+                           save_dir=directory, verbose=False)
+                path = h.download(searchString=":UGRD:10 mb:", verbose=False)
+                if path is None:
+                    continue
+                ds = open_grib(Path(path))
                 try:
-                    h = Herbie(herbie_init(init), model="gefs", product="atmos.5", member=key, fxx=lead,
-                               save_dir=tmp, verbose=False)
-                    path = h.download(searchString=":UGRD:10 mb:", verbose=False)
-                    if path is None: continue
-                    ds = open_grib(Path(path))
-                    try:
-                        uname = var_name(ds, ("u", "u_grd"))
-                        if uname: member_paths[key][lead] = u60(pressure(ds, 10)[uname])
-                    finally: ds.close()
-                except Exception as e:
-                    LOG.warning("GEFS %s +%sh member unavailable: %s", key, lead, e, exc_info=True)
+                    uname = var_name(ds, ("u", "u_grd"))
+                    if uname:
+                        values[key] = u60(pressure(ds, 10)[uname])
+                finally:
+                    ds.close()
+            except Exception as e:
+                LOG.info("GEFS %s +%sh member unavailable: %s", key, lead, e)
+        return values
+
+    # The GEFS ensemble files can lag the control/mean run. Probe the expected
+    # +7-day field, then step back by 6 h until a real member sample is found.
+    # This prevents a just-started cycle from replacing good probabilities with
+    # empty rows while keeping the sample and its displayed run timestamp honest.
+    member_paths: dict[str, dict[int, float]] = {}
+    chosen_init: dt.datetime | None = None
+    with tempfile.TemporaryDirectory(prefix="lm-gefs-members-") as tmp:
+        for offset in (0, 6, 12, 18):
+            candidate = init - dt.timedelta(hours=offset)
+            initial = sample_lead(candidate, leads[0], tmp)
+            if initial:
+                chosen_init = candidate
+                member_paths = {key: {leads[0]: value} for key, value in initial.items()}
+                break
+        if chosen_init is None:
+            LOG.warning("GEFS member fields unavailable for %s and the previous 18 h; retaining the last valid ensemble sample", init)
+            return
+        for lead in leads[1:]:
+            for key, value in sample_lead(chosen_init, lead, tmp).items():
+                member_paths.setdefault(key, {})[lead] = value
+    init = chosen_init
+    init_iso = init.strftime("%Y-%m-%dT%H:%MZ")
     rows = []
     for lead in leads:
         exact = [v[lead] for v in member_paths.values() if lead in v]
@@ -489,7 +551,9 @@ def fetch_aifs_ensemble_odds(init: dt.datetime, out: dict) -> None:
     """Use the open AIFS-ENS perturbed members at the standard stratospheric wind index."""
     from ecmwf.opendata import Client
     model = Client(source="ecmwf", model="aifs-ens", resol="0p25")
-    leads = (168, 240, 288, 336)
+    # Daily samples make the ensemble reversal fraction a readable curve over
+    # the extended forecast, while retaining the standard +7/+10/+12/+14 days.
+    leads = tuple(range(168, 337, 24))
     path = DATA / ".aifs-ens-u10.grib2"
     try:
         model.retrieve(date=init.strftime("%Y%m%d"), time=int(init.strftime("%H")), stream="enfo", type="pf",
@@ -519,7 +583,9 @@ def fetch_aifs_ensemble_odds(init: dt.datetime, out: dict) -> None:
 def fetch_ecmwf_ensemble_odds(init: dt.datetime, out: dict) -> None:
     """Count ECMWF ENS perturbed members with easterly U60 at sampled leads."""
     from ecmwf.opendata import Client
-    leads = (168, 240, 288, 336)
+    # Daily samples make the ensemble reversal fraction a readable curve over
+    # the extended forecast, while retaining the standard +7/+10/+12/+14 days.
+    leads = tuple(range(168, 337, 24))
     path = DATA / ".ecmwf-ens-u10.grib2"
     try:
         Client(source="ecmwf", model="ifs", resol="0p25").retrieve(
@@ -623,17 +689,20 @@ def main() -> None:
             LOG.warning("Previous dashboard state could not be loaded")
     now = utcnow()
     cycle_ifs = latest_cycle(now, (0, 12), 8)
-    cycle_aifs = latest_cycle(now, (0, 6, 12, 18), 7)
+    # AIFS single has the full 15-day range on 00/12; 06/18 single runs are
+    # capped at day 6. AIFS ENS remains available on all four daily cycles.
+    cycle_aifs = latest_cycle(now, (0, 12), 8)
+    cycle_aifs_ens = latest_cycle(now, (0, 6, 12, 18), 7)
     cycle_noaa = latest_cycle(now, (0, 6, 12, 18), 5)
     jobs = [
         ("ecmwf_ifs", lambda: fetch_ecmwf("ecmwf_ifs", "ifs", "oper", "fc", cycle_ifs, out)),
         ("ecmwf_ens", lambda: fetch_ecmwf("ecmwf_ens", "ifs", "enfo", "em", cycle_ifs, out)),
         ("aifs", lambda: fetch_ecmwf("aifs", "aifs-single", "oper", "fc", cycle_aifs, out)),
-        ("aifs_ens", lambda: fetch_ecmwf("aifs_ens", "aifs-ens", "enfo", "em", cycle_ifs, out)),
+        ("aifs_ens", lambda: fetch_ecmwf("aifs_ens", "aifs-ens", "enfo", "em", cycle_aifs_ens, out)),
         ("gfs", lambda: fetch_noaa("gfs", "gfs", "pgrb2.0p25", None, cycle_noaa, out)),
         ("gefs", lambda: fetch_noaa("gefs", "gefs", "atmos.5", "mean", cycle_noaa, out)),
     ]
-    expected = {"ecmwf_ifs": cycle_ifs, "ecmwf_ens": cycle_ifs, "aifs": cycle_aifs, "aifs_ens": cycle_ifs, "gfs": cycle_noaa, "gefs": cycle_noaa}
+    expected = {"ecmwf_ifs": cycle_ifs, "ecmwf_ens": cycle_ifs, "aifs": cycle_aifs, "aifs_ens": cycle_aifs_ens, "gfs": cycle_noaa, "gefs": cycle_noaa}
     for model, task in jobs:
         previous_model = copy.deepcopy(out["models"].get(model))
         previous_source = copy.deepcopy(out["sources"].get(model, {}))
@@ -641,7 +710,7 @@ def main() -> None:
             expected_iso = expected[model].strftime("%Y-%m-%dT%H:%MZ")
             current_model = previous_model or {}
             if (current_model.get("init") == expected_iso and current_model.get("series")
-                    and map_assets_present(current_model)):
+                    and map_assets_present(current_model, model)):
                 LOG.info("Keeping existing %s run %s", model, expected_iso)
                 out["sources"][model] = {**previous_source, "available": True, "init": expected_iso,
                                           "status": "current", "error": None}
