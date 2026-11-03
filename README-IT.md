@@ -6,14 +6,16 @@ Dashboard indipendente per il vortice polare stratosferico. Interfaccia, grafici
 
 - ECMWF IFS, ECMWF ENS, AIFS, AIFS ENS, NOAA GFS e GEFS.
 - Indicatori U60 a 10 hPa, previsione d'ensemble, quota grezza dei membri con U60 sotto zero e flusso eddy v′T′ a 100 hPa.
+- Grafico ensemble giornaliero del vento zonale per ECMWF ENS e AIFS ENS, con media e fascia 10°–90°; temperatura media e fascia ensemble quando i campi dei membri sono disponibili. GEFS riporta il controllo e i 30 membri perturbati ai lead campionati +7, +10, +12 e +14 giorni.
+- Riferimento hindcast ECMWF IFS S2S 2006–2025: percentili del vento U60 a 10 hPa fino al giorno 45, confrontati con il run ECMWF ENS operativo solo sulle scadenze comuni. È climatologia storica del modello, non una previsione operativa a 46 giorni. Il feed storico pubblico è aggiornato mensilmente; la finestra stagionale usa inizializzazioni entro ±15 giorni dell’anno.
 - Mappe polari generate dal workflow: struttura/geopotenziale, anomalia di temperatura e geopotenziale, vento zonale a 10 e 50 hPa.
 - Vista verticale con anomalie e valori standardizzati fino a 10 hPa; GFS mostra anche valori grezzi fino a 1 hPa.
 - Confronto degli ultimi 6 o 12 run, andamento stagionale e verifica retrospettiva con bias, MAE e RMSE.
 - Aggiornamento ogni sei ore via GitHub Actions. Ogni esecuzione genera i dati e le immagini e li pubblica direttamente su Cloudflare Pages con Wrangler.
 
-La dashboard non usa R2: non occorre attivare l’abbonamento R2 né creare bucket. Le mappe sono incluse nella distribuzione Pages corrente; il workflow conserva nel repository solo i JSON compatti dei dati e dello storico. La cache GitHub Actions conserva la climatologia NOAA per evitare di riscaricarla a ogni esecuzione.
+La dashboard non usa R2: non occorre attivare l’abbonamento R2 né creare bucket. Le mappe sono incluse nella distribuzione Pages corrente; il workflow conserva nel repository solo i JSON compatti dei dati e dello storico. La cache GitHub Actions conserva la climatologia NOAA per evitare di riscaricarla a ogni esecuzione. Il riepilogo hindcast è salvato come JSON compatto e ricalcolato quando cambia la finestra stagionale o il dato supera 35 giorni.
 
-Le quote grezze di membri con U60 sotto zero sono mostrate per AIFS ENS e GEFS ai lead +7, +10, +12 e +14 giorni; non sono probabilità calibrate né una verifica completa della definizione di SSW. I punteggi di accuratezza confrontano i run con l’analisi operativa IFS e non sono una verifica indipendente. La climatologia usa NCEP/NCAR Reanalysis 1, griglia 2,5°, 1991–2020.
+Le quote grezze di membri con U60 sotto zero sono mostrate per ECMWF ENS, AIFS ENS e GEFS ai lead +7, +10, +12 e +14 giorni; non sono probabilità calibrate né una verifica completa della definizione di SSW. I punteggi di accuratezza confrontano i run con l’analisi operativa IFS e non sono una verifica indipendente. La climatologia delle mappe usa NCEP/NCAR Reanalysis 1, griglia 2,5°, 1991–2020. La vista hindcast usa il reforecast IFS CY49R1 S2S pubblicato da Planette su AWS Open Data (CC BY 4.0), dieci membri, griglia atmosferica 1,5° e copertura 2006–2025. Il prodotto non include ancora la previsione operativa ECMWF estesa fino a 46 giorni, CFSv2 o climatologia ERA5; questi richiedono feed/prodotti distinti. L’hindcast è un riferimento di climatologia del modello e non sostituisce tali previsioni.
 
 ## Configurazione
 
@@ -48,6 +50,7 @@ Apri **Actions → Refresh LineaMeteo VPS dashboard → Run workflow** e avvia i
 - [ECMWF Open Data](https://www.ecmwf.int/en/forecasts/datasets/open-data) per IFS e AIFS; mantenere l’attribuzione ECMWF e rispettarne i termini d’uso.
 - [NOAA/NCEP GEFS](https://www.nco.ncep.noaa.gov/pmb/products/gens/) e GFS per i campi operativi.
 - [NOAA PSL NCEP/NCAR Reanalysis](https://psl.noaa.gov/data/gridded/data.ncep.reanalysis.html) per la climatologia 1991–2020.
+- [Planette ECMWF IFS S2S Reforecast su AWS Open Data](https://registry.opendata.aws/ifs-s2s-forecast-data/) e [documentazione del dataset](https://github.com/PlanetteAI/planette_ifs_archive) per la climatologia hindcast. Dataset con licenza CC BY 4.0; attribuzione ECMWF e Planette mantenuta nel prodotto.
 - [Cloudflare Pages Direct Upload](https://developers.cloudflare.com/pages/get-started/direct-upload/) e [deploy con GitHub Actions](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/) per la pubblicazione tramite Wrangler.
 
 ## Note operative

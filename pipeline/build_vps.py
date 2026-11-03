@@ -237,6 +237,37 @@ def u60(da: xr.DataArray) -> float:
     return float(at_60n.mean(lon).compute().item())
 
 
+def summarize_ensemble(values: dict[str, dict[int, float]], leads: tuple[int, ...]) -> tuple[list[dict], list[dict]]:
+    """Return auditable U60 member counts and daily ensemble distribution."""
+    rows, series = [], []
+    for lead in leads:
+        sample = [points[lead] for points in values.values() if lead in points and np.isfinite(points[lead])]
+        below = sum(value < 0 for value in sample)
+        rows.append({"leadHours": lead, "members": len(sample), "membersBelowZero": below,
+                     "rawShare": below / len(sample) if sample else None})
+        if sample:
+            q10, q25, median, q75, q90 = np.percentile(sample, [10, 25, 50, 75, 90])
+            series.append({"leadHours": lead, "members": len(sample), "mean": float(np.mean(sample)),
+                           "p10": float(q10), "p25": float(q25), "median": float(median),
+                           "p75": float(q75), "p90": float(q90), "membersBelowZero": below,
+                           "rawShare": below / len(sample)})
+    return rows, series
+
+
+def summarize_ensemble_field(values: dict[str, dict[int, float]], leads: tuple[int, ...]) -> list[dict]:
+    """Summarize a physical ensemble field without wind-reversal semantics."""
+    series = []
+    for lead in leads:
+        sample = [points[lead] for points in values.values() if lead in points and np.isfinite(points[lead])]
+        if not sample:
+            continue
+        q10, q25, median, q75, q90 = np.percentile(sample, [10, 25, 50, 75, 90])
+        series.append({"leadHours": lead, "members": len(sample), "mean": float(np.mean(sample)),
+                       "p10": float(q10), "p25": float(q25), "median": float(median),
+                       "p75": float(q75), "p90": float(q90)})
+    return series
+
+
 def geopotential_height(da: xr.DataArray, name: str) -> xr.DataArray:
     """Convert geopotential (m²/s²) to height (m); leave height fields in metres."""
     units = str(da.attrs.get("units", "")).lower().replace("^", "**").replace(" ", "")
@@ -314,7 +345,7 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
     cycle_tag = dt.datetime.fromisoformat(init.replace("Z", "+00:00")).strftime("%Y%m%dT%H%MZ")
     out = MAPS / f"{model}_{cycle_tag}_{level}hpa_{field}_{step:03d}.png"
     # Keep map, colour scale, explanation and source in separate, readable bands.
-    fig = plt.figure(figsize=(9.3, 8.4), dpi=150, facecolor="white")
+    fig = plt.figure(figsize=(9.3, 8.7), dpi=150, facecolor="white")
     try:
         import cartopy.crs as ccrs
         import cartopy.feature as cfeature
@@ -377,8 +408,12 @@ def draw_map(ds: xr.Dataset, model: str, init: str, step: int, level: int, field
             explanation = f"Colori: vento zonale {timing} (m/s)  ·  rosso/positivo = da ovest verso est, blu/negativo = da est verso ovest"
         if field in ("vortex", "height"):
             explanation += "  ·  isolinee ogni 500 m"
-        fig.text(.08, .078, explanation, color="#17354e", fontsize=7.5, fontweight="medium", va="center", wrap=True)
-        fig.text(.08, .028, "Area rappresentata: emisfero nord da 20°N al Polo  ·  Grafica LineaMeteo  ·  Fonte: " +
+        # Reserve a dedicated caption band below the colourbar. Long captions
+        # wrap to a second line instead of colliding with the tick labels.
+        import textwrap
+        caption = "\n".join(textwrap.wrap(explanation, width=112, break_long_words=False))
+        fig.text(.08, .073, caption, color="#17354e", fontsize=7.2, fontweight="medium", va="top", linespacing=1.25)
+        fig.text(.08, .022, "Area rappresentata: emisfero nord da 20°N al Polo  ·  Grafica LineaMeteo  ·  Fonte: " +
                  ("ECMWF Open Data" if model.startswith(("ecmwf", "aifs")) else "NOAA/NCEP"),
                  color="#667d8d", fontsize=7, va="center")
         fig.savefig(out, bbox_inches="tight", facecolor="white")
@@ -487,30 +522,57 @@ def fetch_noaa(model_key: str, noaa_model: str, product: str, member: str | None
 
 
 def fetch_gefs_raw_odds(init: dt.datetime, out: dict) -> None:
-    """Sample 30 GEFS members at days 7, 10, 12 and 14 for raw U60 reversal shares."""
+    """Sample the GEFS control and 30 perturbed members at days 7, 10, 12 and 14."""
     from herbie import Herbie
     # NOAA GEFS requires one public-file request per member and lead; keep its
     # established checkpoints to avoid multiplying hundreds of downloads.
     leads = (168, 240, 288, 336)
     def sample_lead(run: dt.datetime, lead: int, directory: str) -> dict[str, float]:
         values: dict[str, float] = {}
-        for member in range(1, 31):
-            key = f"p{member:02d}"
+        failures: list[str] = []
+        for member in ("c00", *(f"p{n:02d}" for n in range(1, 31))):
+            key = member
             try:
                 h = Herbie(herbie_init(run), model="gefs", product="atmos.5", member=key, fxx=lead,
                            save_dir=directory, verbose=False)
-                path = h.download(searchString=":UGRD:10 mb:", verbose=False)
+                path = h.download(search=":UGRD:10 mb:", verbose=False)
                 if path is None:
+                    failures.append(f"{key}: no matching GRIB message")
                     continue
-                ds = open_grib(Path(path))
+                try:
+                    ds = open_grib(Path(path))
+                except Exception:
+                    # Some NOAA GEFS GRIB editions label the pressure surface
+                    # differently; the downloaded subset contains only UGRD 10 mb.
+                    ds = xr.open_dataset(Path(path), engine="cfgrib", backend_kwargs={"indexpath": "", "errors": "raise"})
                 try:
                     uname = var_name(ds, ("u", "u_grd"))
-                    if uname:
-                        values[key] = u60(pressure(ds, 10)[uname])
+                    if not uname:
+                        raise RuntimeError("UGRD variable not found in the selected GRIB")
+                    field = pressure(ds, 10)[uname]
+                    # Herbie fxx selects the GEFS forecast file. Prefer the exact
+                    # lead when present; accept a single-step file only when its
+                    # own metadata agrees with that requested lead.
+                    if "step" in field.coords or "step" in field.dims:
+                        step_values = np.atleast_1d(field["step"].values)
+                        hours = [int(value / np.timedelta64(1, "h")) if np.issubdtype(step_values.dtype, np.timedelta64)
+                                 else int(value) for value in step_values]
+                        if lead in hours:
+                            field = field.sel(step=step_values[hours.index(lead)])
+                        elif len(hours) == 1 and hours[0] == lead:
+                            field = field.isel(step=0) if "step" in field.dims else field
+                        else:
+                            raise RuntimeError(f"GEFS file f{lead:03d} reports steps {hours}")
+                    else:
+                        raise RuntimeError("GEFS UGRD field has no forecast-step coordinate")
+                    values[key] = u60(field)
                 finally:
                     ds.close()
             except Exception as e:
-                LOG.info("GEFS %s +%sh member unavailable: %s", key, lead, e)
+                failures.append(f"{key}: {type(e).__name__}: {e}")
+        LOG.info("GEFS %s +%sh: %s/31 members yielded a valid U60 sample", run, lead, len(values))
+        if not values and failures:
+            LOG.warning("GEFS %s +%sh sample examples: %s", run, lead, "; ".join(failures[:3]))
         return values
 
     # The GEFS ensemble files can lag the control/mean run. Probe the expected
@@ -535,16 +597,16 @@ def fetch_gefs_raw_odds(init: dt.datetime, out: dict) -> None:
                 member_paths.setdefault(key, {})[lead] = value
     init = chosen_init
     init_iso = init.strftime("%Y-%m-%dT%H:%MZ")
-    rows = []
-    for lead in leads:
-        exact = [v[lead] for v in member_paths.values() if lead in v]
+    rows, series = summarize_ensemble(member_paths, leads)
+    # Preserve the older-window statistic for existing dashboard readers.
+    for row in rows:
+        lead = row["leadHours"]
         window = [min(v[t] for t in leads if t in v) for v in member_paths.values() if any(t in v for t in leads if t <= lead)]
-        rows.append({"leadHours": lead, "members": len(exact), "membersBelowZero": sum(v < 0 for v in exact),
-                     "rawShare": sum(v < 0 for v in exact) / len(exact) if exact else None,
-                     "windowMembers": len(window), "windowBelowZero": sum(v < 0 for v in window),
-                     "windowRawShare": sum(v < 0 for v in window) / len(window) if window else None})
+        row.update({"windowMembers": len(window), "windowBelowZero": sum(v < 0 for v in window),
+                    "windowRawShare": sum(v < 0 for v in window) / len(window) if window else None})
     out.setdefault("probabilities", {})["gefs"] = {"source": "NOAA GEFS", "run": init_iso, "sampledLeadsHours": list(leads),
-                                                     "method": "quota grezza membri con U60<0 ai lead campionati; non probabilità calibrata", "rows": rows}
+                                                     "method": "quota grezza membri con U60<0 ai lead campionati; non probabilità calibrata",
+                                                     "rows": rows, "series": series}
 
 
 def fetch_aifs_ensemble_odds(init: dt.datetime, out: dict) -> None:
@@ -553,26 +615,32 @@ def fetch_aifs_ensemble_odds(init: dt.datetime, out: dict) -> None:
     model = Client(source="ecmwf", model="aifs-ens", resol="0p25")
     # Daily samples make the ensemble reversal fraction a readable curve over
     # the extended forecast, while retaining the standard +7/+10/+12/+14 days.
-    leads = tuple(range(168, 337, 24))
+    leads = tuple(range(0, 361, 24))
     path = DATA / ".aifs-ens-u10.grib2"
     try:
         model.retrieve(date=init.strftime("%Y%m%d"), time=int(init.strftime("%H")), stream="enfo", type="pf",
-                       step=list(leads), param="u", levelist=10, number=list(range(1, 51)), target=str(path))
+                       step=list(leads), param=["u", "t"], levelist=10, number=list(range(1, 51)), target=str(path))
         ds = open_grib(path)
         try:
             uname = var_name(ds, ("u", "u_grd"))
+            tname = var_name(ds, ("t", "tmp"))
             if not uname: raise RuntimeError("campo U non trovato")
-            rows = []
+            values: dict[str, dict[int, float]] = {}
+            temperatures: dict[str, dict[int, float]] = {}
             for lead in leads:
-                vals = []
                 for member in range(1, 51):
-                    try: vals.append(u60(ds[uname].sel(step=np.timedelta64(lead, "h"), number=member)))
+                    try: values.setdefault(str(member), {})[lead] = u60(ds[uname].sel(step=np.timedelta64(lead, "h"), number=member))
                     except Exception: pass
-                rows.append({"leadHours": lead, "members": len(vals), "membersBelowZero": sum(v < 0 for v in vals),
-                             "rawShare": sum(v < 0 for v in vals) / len(vals) if vals else None})
+                    if tname:
+                        try: temperatures.setdefault(str(member), {})[lead] = cap_mean(ds[tname].sel(step=np.timedelta64(lead, "h"), number=member)) - 273.15
+                        except Exception: pass
+            rows, series = summarize_ensemble(values, leads)
             out.setdefault("probabilities", {})["aifs_ens"] = {"source": "ECMWF AIFS ENS", "run": init.strftime("%Y-%m-%dT%H:%MZ"),
-                                                                    "sampledLeadsHours": list(leads),
-                                                                    "method": "quota grezza membri con U60<0 ai lead campionati; non probabilità calibrata", "rows": rows}
+                                                                    "sampledLeadsHours": list(range(168, 337, 24)),
+                                                                    "method": "media, percentili e quota grezza dei membri con U60<0; non probabilità calibrata",
+                                                                    "rows": [r for r in rows if r["leadHours"] >= 168], "series": series,
+                                                                    "temperatureSeries": summarize_ensemble_field(temperatures, leads),
+                                                                    "temperatureMethod": "media e percentili della temperatura media 55–65°N a 10 hPa; K convertiti in °C"}
         finally: ds.close()
     except Exception as e:
         LOG.warning("AIFS ensemble member odds unavailable: %s", e)
@@ -585,26 +653,33 @@ def fetch_ecmwf_ensemble_odds(init: dt.datetime, out: dict) -> None:
     from ecmwf.opendata import Client
     # Daily samples make the ensemble reversal fraction a readable curve over
     # the extended forecast, while retaining the standard +7/+10/+12/+14 days.
-    leads = tuple(range(168, 337, 24))
+    leads = tuple(range(0, 361, 24))
     path = DATA / ".ecmwf-ens-u10.grib2"
     try:
         Client(source="ecmwf", model="ifs", resol="0p25").retrieve(
             date=init.strftime("%Y%m%d"), time=int(init.strftime("%H")), stream="enfo", type="pf",
-            step=list(leads), param="u", levelist=10, number=list(range(1, 51)), target=str(path))
+            step=list(leads), param=["u", "t"], levelist=10, number=list(range(1, 51)), target=str(path))
         ds = open_grib(path)
         try:
             uname = var_name(ds, ("u", "u_grd"))
+            tname = var_name(ds, ("t", "tmp"))
             if not uname: raise RuntimeError("campo U non trovato nell’ensemble ECMWF")
-            rows = []
+            values: dict[str, dict[int, float]] = {}
+            temperatures: dict[str, dict[int, float]] = {}
             for lead in leads:
-                vals = []
                 for member in range(1, 51):
-                    try: vals.append(u60(ds[uname].sel(step=np.timedelta64(lead, "h"), number=member)))
+                    try: values.setdefault(str(member), {})[lead] = u60(ds[uname].sel(step=np.timedelta64(lead, "h"), number=member))
                     except Exception: pass
-                rows.append({"leadHours": lead, "members": len(vals), "membersBelowZero": sum(v < 0 for v in vals),
-                             "rawShare": sum(v < 0 for v in vals) / len(vals) if vals else None})
+                    if tname:
+                        try: temperatures.setdefault(str(member), {})[lead] = cap_mean(ds[tname].sel(step=np.timedelta64(lead, "h"), number=member)) - 273.15
+                        except Exception: pass
+            rows, series = summarize_ensemble(values, leads)
             out.setdefault("probabilities", {})["ecmwf_ens"] = {"source": "ECMWF ENS", "run": init.strftime("%Y-%m-%dT%H:%MZ"),
-                "sampledLeadsHours": list(leads), "method": "frazione grezza dei membri con U60<0; non probabilità calibrata", "rows": rows}
+                "sampledLeadsHours": list(range(168, 337, 24)),
+                "method": "media, percentili e quota grezza dei membri con U60<0; non probabilità calibrata",
+                "rows": [r for r in rows if r["leadHours"] >= 168], "series": series,
+                "temperatureSeries": summarize_ensemble_field(temperatures, leads),
+                "temperatureMethod": "media e percentili della temperatura media 55–65°N a 10 hPa; K convertiti in °C"}
         finally: ds.close()
     except Exception as e:
         LOG.warning("ECMWF ensemble member fractions unavailable: %s", e)
@@ -676,7 +751,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     DATA.mkdir(parents=True, exist_ok=True)
     ensure_climatology()
-    out = {"schema": DATA_SCHEMA, "metricVersion": METRIC_VERSION, "generatedAt": None, "models": {}, "sources": {}, "verification": {}, "probabilities": {}}
+    out = {"schema": DATA_SCHEMA, "metricVersion": METRIC_VERSION, "generatedAt": None, "models": {}, "sources": {}, "verification": {}, "probabilities": {}, "hindcast": None}
     old_path = DATA / "dashboard.json"
     if old_path.exists():
         try:
@@ -685,6 +760,7 @@ def main() -> None:
                 out["models"] = previous.get("models", {})
                 out["sources"] = previous.get("sources", {})
                 out["probabilities"] = previous.get("probabilities", {})
+                out["hindcast"] = previous.get("hindcast")
         except Exception:
             LOG.warning("Previous dashboard state could not be loaded")
     now = utcnow()
@@ -714,6 +790,10 @@ def main() -> None:
                 LOG.info("Keeping existing %s run %s", model, expected_iso)
                 out["sources"][model] = {**previous_source, "available": True, "init": expected_iso,
                                           "status": "current", "error": None}
+                if model == "gefs":
+                    ensemble = out.get("probabilities", {}).get("gefs", {})
+                    if not ensemble.get("series"):
+                        fetch_gefs_raw_odds(cycle_noaa, out)
                 continue
             if current_model.get("init") == expected_iso and current_model.get("series"):
                 LOG.info("Rebuilding %s run %s because its map PNG files are missing", model, expected_iso)
@@ -747,8 +827,21 @@ def main() -> None:
                                       "expectedInit": expected[model].strftime("%Y-%m-%dT%H:%MZ"), "error": str(e),
                                       "attribution": "ECMWF Open Data" if model.startswith(("ecmwf", "aifs")) else "NOAA/NCEP public model data"}
     expected_ens_run = cycle_ifs.strftime("%Y-%m-%dT%H:%MZ")
-    if out.get("probabilities", {}).get("ecmwf_ens", {}).get("run") != expected_ens_run:
+    old_ecmwf_ens = out.get("probabilities", {}).get("ecmwf_ens", {})
+    if old_ecmwf_ens.get("run") != expected_ens_run or not old_ecmwf_ens.get("series") or not old_ecmwf_ens.get("temperatureSeries"):
         fetch_ecmwf_ensemble_odds(cycle_ifs, out)
+    expected_aifs_ens = cycle_aifs_ens.strftime("%Y-%m-%dT%H:%MZ")
+    old_aifs_ens = out.get("probabilities", {}).get("aifs_ens", {})
+    if old_aifs_ens.get("run") != expected_aifs_ens or not old_aifs_ens.get("series") or not old_aifs_ens.get("temperatureSeries"):
+        fetch_aifs_ensemble_odds(cycle_aifs_ens, out)
+    # The public S2S reforecast archive provides a model-specific historical
+    # reference through day 45. It is a climatological distribution, never
+    # represented as a current operational forecast.
+    try:
+        from build_hindcast import build_hindcast
+        out["hindcast"] = build_hindcast(now)
+    except Exception:
+        LOG.exception("Could not prepare ECMWF IFS S2S hindcast climatology")
     merge_archive(out)
     out["verification"] = build_verification(out)
     out["generatedAt"] = utcnow().isoformat()
