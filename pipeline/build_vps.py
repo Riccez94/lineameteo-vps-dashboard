@@ -26,7 +26,7 @@ DATA = ROOT / "public" / "data"
 MAPS = DATA / "maps"
 MODELS = ("ecmwf_ifs", "ecmwf_ens", "aifs", "aifs_ens", "gfs", "gefs")
 LEVELS = (10, 50)
-ALL_LEVELS = (1000, 925, 850, 700, 500, 300, 200, 150, 100, 70, 50, 30, 10)
+ALL_LEVELS = (1000, 925, 850, 700, 500, 300, 200, 150, 100, 70, 50, 30, 20, 15, 10, 7, 5, 3, 2, 1)
 GFS_LEVELS = (1000, 925, 850, 700, 500, 300, 200, 150, 100, 70, 50, 30, 20, 15, 10, 7, 5, 3, 2, 1)
 MAP_STEPS = tuple(range(0, 361, 12))
 NOAA_MAP_STEPS = tuple(range(0, 385, 12))
@@ -36,6 +36,7 @@ DATA_SCHEMA = 3
 LOG = logging.getLogger("vps")
 CLIM: dict[str, xr.Dataset] = {}
 CLIM_CAP: dict[str, dict[str, np.ndarray]] = {}
+CLIM_CAP_LEVELS: dict[str, np.ndarray] = {}
 
 # Keep each field's colours tied to its physical meaning. Diverging fields are
 # neutral at zero; absolute temperature and signed wind use separate scales.
@@ -142,11 +143,15 @@ def ensure_climatology() -> None:
         base = "https://psl.noaa.gov/thredds/dodsC/Datasets/ncep.reanalysis/Monthlies/pressure/"
         sources = {key: base + f"{key}.mon.mean.nc" for key in ("air", "hgt", "uwnd")}
         arrays = {}
-        coords = None
+        coords: dict[str, dict[str, np.ndarray]] = {}
         for key, url in sources.items():
             ds = xr.open_dataset(url, engine="pydap")
             try:
                 name = key if key in ds.data_vars else next(iter(ds.data_vars))
+                available_levels = np.asarray(ds.level.values)
+                requested_levels = [level for level in ALL_LEVELS if level in available_levels]
+                if not requested_levels:
+                    raise RuntimeError(f"NOAA climatology {key} has no requested pressure levels")
                 monthly_fields = [[] for _ in range(12)]
                 monthly_indices = [[] for _ in range(12)]
                 for start_year in range(1991, 2021, 5):
@@ -157,7 +162,7 @@ def ensure_climatology() -> None:
                         try:
                             chunk = ds[name].sel(
                                 time=slice(f"{start_year}-01-01", f"{end_year}-12-31"),
-                                level=list(ALL_LEVELS), lat=slice(90, 20),
+                                level=requested_levels, lat=slice(90, 20),
                             ).sortby("lat").load()
                             break
                         except Exception:
@@ -169,8 +174,8 @@ def ensure_climatology() -> None:
                             time.sleep(2 ** attempt)
                             ds = xr.open_dataset(url, engine="pydap")
                             name = key if key in ds.data_vars else next(iter(ds.data_vars))
-                    if coords is None and key == "air":
-                        coords = {"levels": chunk.level.values, "lat": chunk.lat.values, "lon": chunk.lon.values}
+                    if key not in coords:
+                        coords[key] = {"levels": chunk.level.values, "lat": chunk.lat.values, "lon": chunk.lon.values}
                     for month in range(1, 13):
                         field = chunk.where(chunk.time.dt.month == month, drop=True)
                         if field.sizes.get("time", 0) == 0:
@@ -191,14 +196,18 @@ def ensure_climatology() -> None:
                 arrays[key + "_index_std"] = np.stack([sample.std(axis=0) for sample in indices]).astype("float32")
             finally:
                 ds.close()
-        arrays.update(coords or {})
+        for key, values in coords.items():
+            arrays[key + "_levels"] = values["levels"]
+            arrays[key + "_lat"] = values["lat"]
+            arrays[key + "_lon"] = values["lon"]
         np.savez_compressed(path, **arrays)
     z = np.load(path)
-    coords = {"month": np.arange(1, 13), "level": z["levels"], "lat": z["lat"], "lon": z["lon"]}
     for key in ("air", "hgt", "uwnd"):
+        coords = {"month": np.arange(1, 13), "level": z[key + "_levels"], "lat": z[key + "_lat"], "lon": z[key + "_lon"]}
         CLIM[key] = xr.Dataset({"mean": (("month", "level", "lat", "lon"), z[key + "_mean"]),
                                 "std": (("month", "level", "lat", "lon"), z[key + "_std"])}, coords=coords)
         CLIM_CAP[key] = {"mean": z[key + "_index_mean"], "std": z[key + "_index_std"]}
+        CLIM_CAP_LEVELS[key] = np.asarray(z[key + "_levels"])
     LOG.info("Monthly 1991–2020 NCEP/NCAR pressure-level baseline ready")
 
 
@@ -211,9 +220,10 @@ def climatology_field(key: str, month: int, level: int, stat: str = "mean") -> x
 
 def climatology_cap(key: str, month: int, level: int, stat: str = "mean") -> float | None:
     regional = CLIM_CAP.get(key)
-    if regional is None or level not in ALL_LEVELS:
+    levels = CLIM_CAP_LEVELS.get(key)
+    if regional is None or levels is None or level not in levels:
         return None
-    return float(regional[stat][month - 1, ALL_LEVELS.index(level)])
+    return float(regional[stat][month - 1, int(np.where(levels == level)[0][0])])
 
 
 def interp_climatology(base: xr.DataArray, target: xr.DataArray, lat: str, lon: str) -> np.ndarray:
@@ -517,10 +527,6 @@ def fetch_noaa(model_key: str, noaa_model: str, product: str, member: str | None
             # Keep the traceback in Actions logs: NOAA data errors must be diagnosable
             # instead of silently looking like a run with no available maps.
             LOG.warning("NOAA %s +%sh skipped: %s", model_key, step, e, exc_info=True)
-    if model_key == "gefs":
-        fetch_gefs_raw_odds(init, out)
-
-
 def fetch_gefs_raw_odds(init: dt.datetime, out: dict) -> None:
     """Sample the GEFS control and 30 perturbed members at days 7, 10, 12 and 14."""
     from herbie import Herbie
@@ -535,7 +541,7 @@ def fetch_gefs_raw_odds(init: dt.datetime, out: dict) -> None:
             try:
                 h = Herbie(herbie_init(run), model="gefs", product="atmos.5", member=key, fxx=lead,
                            save_dir=directory, verbose=False)
-                path = h.download(search=":UGRD:10 mb:", verbose=False)
+                path = h.download(searchString=":UGRD:10 mb:", verbose=False)
                 if path is None:
                     failures.append(f"{key}: no matching GRIB message")
                     continue
@@ -764,11 +770,11 @@ def main() -> None:
         except Exception:
             LOG.warning("Previous dashboard state could not be loaded")
     now = utcnow()
-    cycle_ifs = latest_cycle(now, (0, 12), 8)
+    cycle_ifs = latest_cycle(now, (0, 12), 5)
     # AIFS single has the full 15-day range on 00/12; 06/18 single runs are
     # capped at day 6. AIFS ENS remains available on all four daily cycles.
-    cycle_aifs = latest_cycle(now, (0, 12), 8)
-    cycle_aifs_ens = latest_cycle(now, (0, 6, 12, 18), 7)
+    cycle_aifs = latest_cycle(now, (0, 12), 5)
+    cycle_aifs_ens = latest_cycle(now, (0, 6, 12, 18), 5)
     cycle_noaa = latest_cycle(now, (0, 6, 12, 18), 5)
     jobs = [
         ("ecmwf_ifs", lambda: fetch_ecmwf("ecmwf_ifs", "ifs", "oper", "fc", cycle_ifs, out)),
@@ -790,10 +796,6 @@ def main() -> None:
                 LOG.info("Keeping existing %s run %s", model, expected_iso)
                 out["sources"][model] = {**previous_source, "available": True, "init": expected_iso,
                                           "status": "current", "error": None}
-                if model == "gefs":
-                    ensemble = out.get("probabilities", {}).get("gefs", {})
-                    if not ensemble.get("series"):
-                        fetch_gefs_raw_odds(cycle_noaa, out)
                 continue
             if current_model.get("init") == expected_iso and current_model.get("series"):
                 LOG.info("Rebuilding %s run %s because its map PNG files are missing", model, expected_iso)
@@ -826,6 +828,17 @@ def main() -> None:
                                       "status": "stale" if previous_model else "unavailable",
                                       "expectedInit": expected[model].strftime("%Y-%m-%dT%H:%MZ"), "error": str(e),
                                       "attribution": "ECMWF Open Data" if model.startswith(("ecmwf", "aifs")) else "NOAA/NCEP public model data"}
+    # GEFS member statistics are an independent product: the mean/control
+    # run can fail or be retained from cache while perturbed members are
+    # available (or vice versa). Keep their acquisition outside fetch_noaa.
+    expected_gefs_ens = cycle_noaa.strftime("%Y-%m-%dT%H:%MZ")
+    old_gefs_ens = out.get("probabilities", {}).get("gefs", {})
+    if old_gefs_ens.get("run") != expected_gefs_ens or not old_gefs_ens.get("series"):
+        try:
+            fetch_gefs_raw_odds(cycle_noaa, out)
+        except Exception:
+            LOG.exception("Could not prepare GEFS member statistics")
+
     expected_ens_run = cycle_ifs.strftime("%Y-%m-%dT%H:%MZ")
     old_ecmwf_ens = out.get("probabilities", {}).get("ecmwf_ens", {})
     if old_ecmwf_ens.get("run") != expected_ens_run or not old_ecmwf_ens.get("series") or not old_ecmwf_ens.get("temperatureSeries"):
