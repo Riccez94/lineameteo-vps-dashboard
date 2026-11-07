@@ -39,7 +39,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: public/data/climatology.npz
-          key: vps-climatology-ncep-r1-1991-2020-v2
+          key: vps-climatology-ncep-r1-1991-2020-v3
       - name: Install GRIB tools and libraries
         run: |
           sudo apt-get update
