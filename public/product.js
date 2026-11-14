@@ -6,6 +6,7 @@
   const s = {data:null,model:"ecmwf",vmodel:"ecmwf",kind:"single",chart:"wind",mapField:"vortex",level:"10",step:0,vfield:"wind",runCount:12};
   const num = v => v == null || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null;
   const fmt = v => v == null ? "—" : Number(v).toLocaleString("it-IT",{maximumFractionDigits:1,minimumFractionDigits:1});
+  const escapeHtml = value => String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
   const date = v => new Intl.DateTimeFormat("it-IT",{day:"2-digit",month:"short",timeZone:"UTC"}).format(new Date(v));
   const dateTime = v => new Intl.DateTimeFormat("it-IT",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"UTC"}).format(new Date(v))+" UTC";
   const runDescription = (key, run) => {
@@ -14,6 +15,9 @@
       ? "ultimo run disponibile "+dateTime(run)+" · run atteso "+dateTime(source.expectedInit)
       : "run "+dateTime(run);
   };
+  function latestExpectedCycleFor(key,now=new Date()){
+    const cycles=(key==="ecmwf_ifs"||key==="ecmwf_ens"||key==="aifs")?[0,12]:[0,6,12,18],due=new Date(now.getTime()-5*3600000);let hour=cycles.filter(x=>x<=due.getUTCHours()).at(-1),day=new Date(Date.UTC(due.getUTCFullYear(),due.getUTCMonth(),due.getUTCDate()));if(hour==null){day.setUTCDate(day.getUTCDate()-1);hour=cycles.at(-1)}day.setUTCHours(hour,0,0,0);return day.getTime();
+  }
   const ensembleRunDescription = (key, run) => {
     const expected=s.data?.sources?.[key]?.expectedInit;
     return expected&&Date.parse(run)<Date.parse(expected)
@@ -24,12 +28,17 @@
     let a = s.model === "compare" ? Object.keys(s.data.models||{}) : s.model === "gfs" ? ["gfs","gefs"] : s.model === "aifs" ? ["aifs","aifs_ens"] : ["ecmwf_ifs","ecmwf_ens"];
     return a.filter(k => s.kind === "ensemble" ? k.endsWith("_ens") || k === "gefs" : !(k.endsWith("_ens") || k === "gefs"));
   }
+  function normalizeStrengthSelection(){
+    if(s.chart==="hindcast"){s.kind="ensemble";s.model="ecmwf"}
+    if((s.chart==="season"||s.chart==="trend")&&s.kind==="ensemble")s.kind="single";
+    if(s.chart==="trend"&&s.model==="compare")s.model="ecmwf";
+  }
   function chart(container, series, unit, zero, empty={}) {
     // Do not render isolated dots as if they were a time series. Several
     // feeds can contain one valid point each while still having no line to
     // interpret (a common case during the first archive runs).
     const usable=series.map(a=>({...a,points:a.points.filter(p=>num(p.y)!==null&&Number.isFinite(Date.parse(p.x))).sort((p,q)=>Date.parse(p.x)-Date.parse(q.x))}))
-      .filter(a=>a.points.length>1&&a.points.some((p,i)=>i>0&&Date.parse(p.x)-Date.parse(a.points[i-1].x)<=(Number.isFinite(a.maxGapHours)?a.maxGapHours:36)*3600000));
+      .filter(a=>a.allowPoints?a.points.length>0:a.points.length>1&&a.points.some((p,i)=>i>0&&Date.parse(p.x)-Date.parse(a.points[i-1].x)<=(Number.isFinite(a.maxGapHours)?a.maxGapHours:36)*3600000));
     let pts = usable.flatMap(x=>[...x.points,...(x.band||[]).flatMap(p=>[{x:p.x,y:p.low},{x:p.x,y:p.high}])]);
     if (!usable.length) { container.innerHTML='<div class="chart-empty compact"><div><strong>'+(empty.title||"Serie non ancora disponibile")+'</strong>'+(empty.message||"Il feed non contiene ancora scadenze sufficienti e consecutive per tracciare un andamento.")+'</div></div>';if(container.id==="strength-chart")$("#strength-legend").innerHTML="";return; }
     let c=document.createElement("canvas"), w=1200,h=420,dpr=Math.min(2,window.devicePixelRatio||1);
@@ -43,7 +52,7 @@
     x.textAlign="left";
     if(zero&&lo<0&&hi>0){x.strokeStyle="#1c3548";x.beginPath();x.moveTo(m.l,Y(0));x.lineTo(w-m.r,Y(0));x.stroke()}
     usable.forEach(a=>{
-      if(a.band?.length>1){const band=[...a.band].filter(p=>num(p.low)!==null&&num(p.high)!==null&&Number.isFinite(Date.parse(p.x))).sort((p,q)=>Date.parse(p.x)-Date.parse(q.x));if(band.length>1){x.save();x.globalAlpha=.14;x.fillStyle=a.color;x.beginPath();band.forEach((p,i)=>i?x.lineTo(X(p.x),Y(p.high)):x.moveTo(X(p.x),Y(p.high)));[...band].reverse().forEach(p=>x.lineTo(X(p.x),Y(p.low)));x.closePath();x.fill();x.restore()}}
+      if(a.band?.length>1){const band=[...a.band].filter(p=>num(p.low)!==null&&num(p.high)!==null&&Number.isFinite(Date.parse(p.x))).sort((p,q)=>Date.parse(p.x)-Date.parse(q.x)),maxGapHours=Number.isFinite(a.maxGapHours)?a.maxGapHours:36;let region=[];const fillRegion=()=>{if(region.length>1){x.save();x.globalAlpha=.14;x.fillStyle=a.color;x.beginPath();region.forEach((p,i)=>i?x.lineTo(X(p.x),Y(p.high)):x.moveTo(X(p.x),Y(p.high)));[...region].reverse().forEach(p=>x.lineTo(X(p.x),Y(p.low)));x.closePath();x.fill();x.restore()}region=[]};band.forEach((p,i)=>{if(i&&Date.parse(p.x)-Date.parse(band[i-1].x)>maxGapHours*3600000)fillRegion();region.push(p)});fillRegion()}
       const p=a.points.filter(q=>num(q.y)!==null&&Number.isFinite(Date.parse(q.x))).sort((q,r)=>Date.parse(q.x)-Date.parse(r.x));
       if(!p.length)return;x.strokeStyle=a.color;x.lineWidth=a.name==="Analisi IFS archiviata"?3.5:2.8;x.lineJoin="round";x.lineCap="round";x.setLineDash(a.dash?[7,5]:[]);let segment=[];
       const flush=()=>{if(segment.length>1){x.beginPath();segment.forEach((q,i)=>i?x.lineTo(X(q.x),Y(q.y)):x.moveTo(X(q.x),Y(q.y)));x.stroke()}segment=[]};
@@ -147,7 +156,7 @@
         return runs.map((r,i)=>({
           name:(names[k]||k)+" · "+dateTime(r[0]),
           color:group.length===1?runColors[Math.max(0,runColors.length-runs.length+i)]:`hsl(${(i*29+g*127)%360} 58% ${i===runs.length-1?38:52}%)`,
-          points:r[1].map(p=>({x:p.valid,y:num(p.u10)})).filter(p=>p.y!==null)
+          points:r[1].map(p=>({x:p.valid,y:num(p.u10)})).filter(p=>p.y!==null),maxGapHours:48
         }));
       });
       chart($("#strength-chart"),series,"m/s",true,{title:"Archivio dei run in raccolta",message:"Il confronto tra emissioni comparirà quando saranno disponibili più run con scadenze valide."})
@@ -156,14 +165,14 @@
       const observed=Object.entries(s.data.analysis||{}).map(([x,y])=>({x,y:num(y)})).filter(p=>p.y!==null).sort((a,b)=>Date.parse(a.x)-Date.parse(b.x));
       const forecasts=modelSeries(which,"u10");
       const normal=which.flatMap(k=>(s.data.models?.[k]?.series||[]).filter(p=>num(p.u10normal)!==null).map(p=>({x:p.valid,y:num(p.u10normal)})));
-      chart($("#strength-chart"),[{name:"Analisi IFS archiviata",color:"#17354e",points:observed},...forecasts,{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal}],"m/s",true,{title:"Serie U60 in raccolta",message:"Sono mostrate le scadenze archiviate e previste disponibili, fino a circa 15 giorni. Non è una previsione per l’intera stagione."});
+      chart($("#strength-chart"),[{name:"Analisi IFS archiviata",color:"#17354e",points:observed,maxGapHours:48},...forecasts.map(a=>({...a,maxGapHours:48})),{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal,maxGapHours:48}],"m/s",true,{title:"Serie U60 in raccolta",message:"Sono mostrate le scadenze archiviate e previste disponibili, fino a circa 15 giorni. Non è una previsione per l’intera stagione."});
     }
     else {
       const forecasts=modelSeries(which,field),observed=Object.entries(s.data.analysis||{}).map(([x,y])=>({x,y:num(y)})).filter(p=>p.y!==null).sort((a,b)=>Date.parse(a.x)-Date.parse(b.x));
       const normalField=s.chart==="temperature"?"t10normal":"u10normal",normal=which.flatMap(k=>(s.data.models?.[k]?.series||[]).filter(p=>num(p[normalField])!==null).map(p=>({x:p.valid,y:num(p[normalField])})));
       const references=s.chart==="wind"?[{name:"Analisi IFS archiviata",color:"#17354e",points:observed},{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal}]:[{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal}];
       const empty=s.kind==="ensemble"?{title:"Serie dei membri non disponibile",message:"I feed ensemble forniscono i conteggi della tabella, ma non una sequenza temporale dei singoli membri per questo grafico."}:{title:"Previsione non disponibile",message:"Il modello non ha ancora fornito almeno due scadenze valide per questa variabile."};
-      chart($("#strength-chart"),forecasts.length?[...references,...forecasts]:[],s.chart==="temperature"?"°C":"m/s",s.chart!=="temperature",empty);
+      chart($("#strength-chart"),forecasts.length?[...references,...forecasts.map(a=>({...a,maxGapHours:48}))]:[],s.chart==="temperature"?"°C":"m/s",s.chart!=="temperature",empty);
     }
     $("#strength-title").textContent=s.chart==="hindcast"?"ECMWF IFS S2S · clima hindcast a 10 hPa · 60°N":s.kind==="ensemble"&&s.chart==="wind"?"Vento zonale ensemble · 10 hPa · 60°N":s.kind==="ensemble"&&s.chart==="temperature"?"Temperatura ensemble · 10 hPa · media 55–65°N":s.chart==="temperature"?"Temperatura a 10 hPa · media 55–65°N":s.chart==="trend"?"Ultimi "+s.runCount+" run archiviati · U60":s.chart==="season"?"Serie U60 · analisi e previsioni":"Vento zonale medio · 60°N · 10 hPa";
     $("#strength-subtitle").textContent=s.chart==="hindcast"?"Fascia: 10°–90° dei membri hindcast ECMWF 2006–2025, con inizializzazioni vicine a questa data dell’anno. La media ENS operativa è mostrata soltanto fino alla sua ultima scadenza disponibile; la climatologia non è una previsione a 46 giorni.":s.kind==="ensemble"&&s.chart==="wind"?"Linea: media dei membri. Fascia: percentili 10°–90°. La tabella riporta separatamente la quota grezza dei membri con U60<0; non è una probabilità calibrata di SSW.":s.kind==="ensemble"&&s.chart==="temperature"?"Media della temperatura a 10 hPa tra 55° e 65°N. Linea: media dei membri; fascia: percentili 10°–90°. Mostriamo solo i modelli che forniscono i campi necessari.":s.chart==="temperature"?"Temperatura media tra 55° e 65°N a 10 hPa. Sono mostrate solo le previsioni effettivamente disponibili.":s.chart==="trend"?"Confronto delle ultime emissioni archiviate: ogni curva è un run distinto. Le differenze mostrano come è cambiata la previsione.":s.chart==="season"?"Serie temporale disponibile: analisi archiviate e previsioni fino a circa 15 giorni. Non rappresenta l’intera stagione; la linea dello zero separa venti occidentali e orientali.":"Vento zonale medio a 60°N e 10 hPa. Sopra lo zero soffiano venti occidentali; sotto lo zero, venti orientali.";
@@ -172,11 +181,11 @@
       $("#strength-subtitle").textContent+=" Archivio: "+n+" analisi; run disponibile fino a +"+Math.round(latest/24)+" giorni; "+fc+" punti di previsione. Non è disponibile un’indicazione affidabile per l’intera stagione.";
     }
     let avail=which.filter(k=>s.data.sources?.[k]?.available&&s.data.models?.[k]?.series?.length);$("#strength-freshness").textContent=s.chart==="hindcast"?(s.data.hindcast?.available?"Hindcast ECMWF IFS · "+s.data.hindcast.firstYear+"–"+s.data.hindcast.lastYear+" · "+s.data.hindcast.initSamples+" inizializzazioni stagionali · aggiornato "+dateTime(s.data.hindcast.generatedAt):"Climatologia hindcast ECMWF non disponibile nel feed."):s.kind==="ensemble"&&s.chart==="wind"&&ensembleWindSeries(which).length?which.map(k=>{let f=s.data.probabilities?.[k];return f?.series?.length?names[k]+" · "+dateTime(f.run)+" · "+f.series.length+" scadenze":""}).filter(Boolean).join(" | ")+" · GEFS ai lead campionati.":avail.map(k=>names[k]+" · "+runDescription(k,s.data.sources[k].init)).join(" | ")||(s.kind==="ensemble"?"Nessun membro ensemble utilizzabile per questa selezione.":"Serie non disponibile per "+which.map(k=>names[k]||k).join(", ")+". Il feed del modello non contiene campioni utilizzabili in questa modalità.");
-    let wave=which.map(k=>({name:names[k],color:colors[k],points:(s.data.models[k]?.series||[]).filter(p=>num(p.heatFlux100)!==null).map(p=>({x:p.valid,y:num(p.heatFlux100)}))})).filter(x=>x.points.length);
+    let wave=which.map(k=>({name:names[k],color:colors[k],points:(s.data.models[k]?.series||[]).filter(p=>num(p.heatFlux100)!==null).map(p=>({x:p.valid,y:num(p.heatFlux100)})),maxGapHours:48})).filter(x=>x.points.length);
     if(wave.length){chart($("#wave-chart"),wave,"K·m/s",false);$("#wave-legend").innerHTML=wave.map(x=>'<span class="leg"><i class="line-swatch" style="--c:'+x.color+'"></i>'+x.name+'</span>').join("")}
     else {$("#wave-chart").innerHTML='<div class="chart-empty compact"><div><strong>Flusso non disponibile</strong>'+(s.kind==="ensemble"?"Il feed dei membri selezionato non include ancora una serie di vento e temperatura a 100 hPa per calcolare v′T′.":"Nei run selezionati mancano i campi necessari per calcolare v′T′ a 100 hPa.")+'</div></div>';$("#wave-legend").innerHTML=""}
   }
-  const mapImageCache=new Map();let mapRenderVersion=0;
+  const mapImageCache=new Map();let mapRenderVersion=0,mapAvailableSteps=[];
   function preloadMapImage(url){
     if(!mapImageCache.has(url)){
       const promise=new Promise((resolve,reject)=>{const image=new Image();let settled=false;const ready=async()=>{if(settled)return;settled=true;try{if(image.decode)await image.decode()}catch{}resolve(image)};image.onload=ready;image.onerror=()=>{if(!settled){settled=true;reject(new Error("Impossibile caricare la carta"))}};image.src=url;if(image.complete&&image.naturalWidth)ready()});
@@ -186,8 +195,8 @@
   }
   async function renderMaps(){
     if(!s.data)return;$$('[data-level]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.level===s.level)));$$('[data-field]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.field===s.mapField)));let sel=$("#map-model").value,which=sel==="compare"?["ecmwf_ifs","gfs","aifs"]:[sel];
-    const slider=$("#map-step"),maxLead=$("#map-model").value==="gfs"?384:360;slider.max=String(maxLead/12);if(Number(slider.value)>Number(slider.max))slider.value=slider.max;s.step=Number(slider.value); const ticks=$("#map-model").value==="gfs"?["Ora","Giorno 4","Giorno 8","Giorno 12","Giorno 16"]:["Ora","Giorno 3","Giorno 6","Giorno 9","Giorno 12","Giorno 15"]; $(".tickrow").innerHTML=ticks.map(label=>"<span>"+label+"</span>").join("");
-    let step=Number(s.step)*12,levels=s.level==="both"?[10,50]:[Number(s.level)],imgs=[],missing=[];
+    const slider=$("#map-step"),selectedModel=$("#map-model").value,selectedKeys=selectedModel==="compare"?["ecmwf_ifs","gfs","aifs"]:[selectedModel],selectedLevels=s.level==="both"?[10,50]:[Number(s.level)],candidateMax=selectedModel==="gfs"?384:360;mapAvailableSteps=[];for(let lead=0;lead<=candidateMax;lead+=12){const supported=selectedKeys.some(k=>{const model=s.data.models?.[k],modelStep=selectedModel==="compare"&&s.data.models?.ecmwf_ifs?.init&&model?.init?(Date.parse(s.data.models.ecmwf_ifs.init)+lead*3600000-Date.parse(model.init))/3600000:lead;return Number.isInteger(modelStep)&&selectedLevels.every(level=>!!model?.maps?.[String(level)]?.[String(modelStep)]?.[s.mapField])});if(supported)mapAvailableSteps.push(lead)}if(!mapAvailableSteps.length)mapAvailableSteps=[0];slider.min="0";slider.max=String(mapAvailableSteps.length-1);if(Number(slider.value)>Number(slider.max))slider.value=slider.max;s.step=mapAvailableSteps[Number(slider.value)]??mapAvailableSteps[0];const ticks=selectedModel==="gfs"?["Ora","Giorno 4","Giorno 8","Giorno 12","Giorno 16"]:["Ora","Giorno 3","Giorno 6","Giorno 9","Giorno 12","Giorno 15"];$(".tickrow").innerHTML=ticks.map(label=>"<span>"+label+"</span>").join("");
+    let step=Number(s.step),levels=s.level==="both"?[10,50]:[Number(s.level)],imgs=[],missing=[];
     const fieldNames={vortex:"struttura del vortice",temp:"anomalia di temperatura",height:"anomalia di geopotenziale",wind:"vento zonale"};
     const shortDate=v=>new Intl.DateTimeFormat("it-IT",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"UTC"}).format(new Date(v))+" UTC";
     // In comparison mode align maps by valid time rather than lead hour: model
@@ -210,8 +219,8 @@
     const leadText=step===0?"Analisi":step<48?"+"+step+" h":"+"+(step/24)+" giorni";
     const timing=step===0?"nell’analisi":"nella previsione";
     const captions={temp:"Scarto della temperatura dalla media mensile NOAA PSL 1991–2020, in °C. Blu = più freddo della media; giallo/rosso = più mite. Scala fissa −30…+30 °C.",height:"Scarto del geopotenziale dalla media NOAA PSL 1991–2020, in metri. Blu = altezze più basse; giallo/rosso = più alte. Le linee nere sono il geopotenziale "+timing+" (intervallo 500 m). Scala fissa −1200…+1200 m.",vortex:"Temperatura assoluta "+timing+" (°C; scala fissa per quota: 10 hPa −80…+10 °C, 50 hPa −80…−20 °C). Viola/blu = più freddo; giallo/rosso = più mite. Le linee nere sono il geopotenziale (intervallo 500 m).",wind:"Vento zonale "+timing+", in m/s. Viola/blu = vento orientale (valori negativi); bianco = vicino a zero; verde/giallo/rosso = vento occidentale (valori positivi). Scala fissa −60…+60 m/s."};
-    const sourceLine=missing.length?"Carte non disponibili per: "+missing.map(item=>{const k=Object.keys(names).find(key=>item.startsWith(names[key]));const error=k&&s.data.sources?.[k]?.error;return item+(error?" ("+error+")":"")}).join(", ")+". Il feed del run selezionato non contiene il campo, il livello o la scadenza richiesta.":"";
-    const missingMarkup=sourceLine?`<p class="map-missing" role="status">${sourceLine}</p>`:"";
+    const sourceLine=missing.length?"Carte non disponibili per: "+missing.map(item=>{const k=Object.keys(names).find(key=>item.startsWith(names[key]));const error=k&&s.data.sources?.[k]?.error;return item+(error?" ("+String(error).slice(0,180)+")":"")}).join(", ")+". Il feed del run selezionato non contiene il campo, il livello o la scadenza richiesta.":"";
+    const missingMarkup=sourceLine?`<p class="map-missing" role="status">${escapeHtml(sourceLine)}</p>`:"";
     const unavailableMarkup=`<div class="map-placeholder"><div><strong>Carta non disponibile</strong><span>Per ${fieldNames[s.mapField]} a ${levels.join(" e ")} hPa · +${step} ore il feed selezionato non contiene dati. Prova un’altra quota, scadenza o modello.</span></div></div>`;
     let display=$("#map-display");const signature=imgs.map(a=>a.k+":"+a.l).join("|");
     const renderVersion=++mapRenderVersion;
@@ -243,7 +252,7 @@
     });
     const missingNode=replaceStage?grid.parentElement.querySelector("[data-map-missing]"):display.querySelector("[data-map-missing]");
     if(missingNode)missingNode.innerHTML=missingMarkup;
-    if(replaceStage){const nextStage=grid.parentElement;display.replaceWith(nextStage);display=nextStage}
+    if(replaceStage){const nextStage=grid.parentElement;display.className="map-stage";display.dataset.mapSignature=signature;display.replaceChildren(...nextStage.childNodes)}
     display.removeAttribute("aria-busy");
     $("#map-step-label").textContent=leadText+" · "+(validLead?shortDate(validLead):"validità non disponibile");
     $("#map-freshness").textContent="Run visualizzato: "+imgs.map(a=>(names[a.k]||a.k)+" "+shortDate(a.run)+(a.status==="stale"?" (run precedente; atteso "+shortDate(a.expectedInit)+")":"")).join(" · ")+". Scadenza "+(validLead?shortDate(validLead):"non disponibile")+(step===0?" · analisi":" · previsione");
@@ -285,15 +294,15 @@
     const colorAt=v=>{let t=Math.max(lo,Math.min(hi,v)),i=palette.findIndex(p=>t<=p[0]);if(i<=0)return palette[0][1];if(i<0)return palette.at(-1)[1];const [a,ca]=palette[i-1],[b,cb]=palette[i],f=(t-a)/(b-a||1);return ca.map((c,j)=>Math.round(c+(cb[j]-c)*f))};
     const W=1280,H=670,L=92,R=94,T=48,B=128,PW=W-L-R,PH=H-T-B,minP=Math.min(...levels),maxP=Math.max(...levels),times=rows.map(r=>Date.parse(r.valid)),t0=times[0],t1=times.at(-1);
     const xTime=t=>L+(t-t0)/(t1-t0||1)*PW, yPressure=p=>T+Math.log(p/minP)/Math.log(maxP/minP)*PH;
-    const rowAt=(r,p)=>{const pts=levels.map(l=>({p:l,v:num(r[valueKey(l)])})).filter(x=>x.v!==null);if(!pts.length||p<pts[0].p||p>pts.at(-1).p)return null;for(let i=1;i<pts.length;i++){if(p<=pts[i].p){const a=pts[i-1],b=pts[i],f=Math.log(p/a.p)/Math.log(b.p/a.p);return a.v+(b.v-a.v)*f}}return pts.at(-1).v};
-    const sample=(time,p)=>{let i=times.findIndex(t=>t>=time);if(i<0)i=times.length-1;if(i===0)return rowAt(rows[0],p);const a=times[i-1],b=times[i];if(b-a>48*3600000)return null;const va=rowAt(rows[i-1],p),vb=rowAt(rows[i],p);if(va===null||vb===null)return null;const f=(time-a)/(b-a||1);return va+(vb-va)*f};
+    const rowAt=(r,p)=>{const pts=levels.map(l=>({p:l,v:num(r[valueKey(l)])})).filter(x=>x.v!==null).sort((a,b)=>a.p-b.p);if(!pts.length||p<pts[0].p||p>pts.at(-1).p)return null;for(let i=1;i<pts.length;i++){if(p<=pts[i].p){const a=pts[i-1],b=pts[i],ratio=b.p/a.p;if(ratio>2.25)return null;const f=Math.log(p/a.p)/Math.log(b.p/a.p);return a.v+(b.v-a.v)*f}}return pts.at(-1).v};
+    const sample=(time,p)=>{if(time<times[0]||time>times.at(-1))return null;let loIndex=0,hiIndex=times.length-1;while(loIndex<hiIndex){const mid=(loIndex+hiIndex)>>1;if(times[mid]<time)loIndex=mid+1;else hiIndex=mid}const i=loIndex;if(times[i]===time)return rowAt(rows[i],p);if(i===0)return null;const a=times[i-1],b=times[i];if(b-a>48*3600000)return null;const va=rowAt(rows[i-1],p),vb=rowAt(rows[i],p);if(va===null||vb===null)return null;const f=(time-a)/(b-a);return va+(vb-va)*f};
     const container=$("#vertical-chart");container.innerHTML='<canvas id="vertical-canvas" role="img" aria-label="'+fieldName+' in sezione verticale: pressione in hPa a sinistra, quota approssimata in km a destra, tempo UTC da sinistra a destra."></canvas><div class="chart-tooltip" hidden></div>';container.classList.add("vertical-box");container.style.position="relative";
     const canvas=$("#vertical-canvas"),dpr=Math.min(2,window.devicePixelRatio||1);canvas.width=W*dpr;canvas.height=H*dpr;canvas.style.width="100%";canvas.style.height="auto";const ctx=canvas.getContext("2d");ctx.scale(dpr,dpr);ctx.fillStyle="#fff";ctx.fillRect(0,0,W,H);
-    const image=ctx.createImageData(PW,PH);for(let py=0;py<PH;py++){const p=minP*Math.pow(maxP/minP,py/(PH-1));for(let px=0;px<PW;px++){const t=t0+(t1-t0)*px/(PW-1),v=sample(t,p);if(v===null)continue;const c=colorAt(v),n=(py*PW+px)*4;image.data[n]=c[0];image.data[n+1]=c[1];image.data[n+2]=c[2];image.data[n+3]=255}}ctx.putImageData(image,L,T);
+    const rasterW=Math.round(PW*dpr),rasterH=Math.round(PH*dpr),image=ctx.createImageData(rasterW,rasterH);for(let py=0;py<rasterH;py++){const p=minP*Math.pow(maxP/minP,py/(rasterH-1));for(let px=0;px<rasterW;px++){const t=t0+(t1-t0)*px/(rasterW-1),v=sample(t,p);if(v===null)continue;const c=colorAt(v),n=(py*rasterW+px)*4;image.data[n]=c[0];image.data[n+1]=c[1];image.data[n+2]=c[2];image.data[n+3]=255}}ctx.putImageData(image,L*dpr,T*dpr);
     ctx.save();ctx.beginPath();ctx.rect(L,T,PW,PH);ctx.clip();
     const interval=scale==="sigma"?.5:scale==="raw"?(s.vfield==="wind"?10:s.vfield==="temperature"?10:2500):(s.vfield==="wind"?5:s.vfield==="temperature"?2:100),contourStart=Math.ceil(lo/interval)*interval;
     ctx.lineWidth=.7;ctx.strokeStyle="rgba(24,49,67,.30)";
-    for(let level=contourStart;level<=hi;level+=interval){for(let i=0;i<rows.length-1;i++){if(times[i+1]-times[i]>48*3600000)continue;for(let j=0;j<levels.length-1;j++){const v=[num(rows[i][valueKey(levels[j])]),num(rows[i+1][valueKey(levels[j])]),num(rows[i+1][valueKey(levels[j+1])]),num(rows[i][valueKey(levels[j+1])])];if(v.some(a=>a===null))continue;const points=[[xTime(times[i]),yPressure(levels[j])],[xTime(times[i+1]),yPressure(levels[j])],[xTime(times[i+1]),yPressure(levels[j+1])],[xTime(times[i]),yPressure(levels[j+1])]],cross=[];for(let e=0;e<4;e++){const n=(e+1)%4;if((v[e]<level&&v[n]>=level)||(v[e]>=level&&v[n]<level)){const f=(level-v[e])/(v[n]-v[e]||1);cross.push([points[e][0]+(points[n][0]-points[e][0])*f,points[e][1]+(points[n][1]-points[e][1])*f])}}for(let q=0;q+1<cross.length;q+=2){ctx.beginPath();ctx.moveTo(...cross[q]);ctx.lineTo(...cross[q+1]);ctx.stroke()}}}}
+    for(let level=contourStart;level<=hi;level+=interval){for(let i=0;i<rows.length-1;i++){if(times[i+1]-times[i]>48*3600000)continue;for(let j=0;j<levels.length-1;j++){if(levels[j+1]/levels[j]>2.25)continue;const v=[num(rows[i][valueKey(levels[j])]),num(rows[i+1][valueKey(levels[j])]),num(rows[i+1][valueKey(levels[j+1])]),num(rows[i][valueKey(levels[j+1])])];if(v.some(a=>a===null))continue;const points=[[xTime(times[i]),yPressure(levels[j])],[xTime(times[i+1]),yPressure(levels[j])],[xTime(times[i+1]),yPressure(levels[j+1])],[xTime(times[i]),yPressure(levels[j+1])]],cross=[];for(let e=0;e<4;e++){const n=(e+1)%4;if((v[e]<level&&v[n]>=level)||(v[e]>=level&&v[n]<level)){const f=(level-v[e])/(v[n]-v[e]||1);cross.push([points[e][0]+(points[n][0]-points[e][0])*f,points[e][1]+(points[n][1]-points[e][1])*f])}}for(let q=0;q+1<cross.length;q+=2){ctx.beginPath();ctx.moveTo(...cross[q]);ctx.lineTo(...cross[q+1]);ctx.stroke()}}}}
     ctx.restore();
     ctx.font="12px Inter, Segoe UI, sans-serif";ctx.fillStyle="#536c7f";ctx.strokeStyle="#d8e1e8";ctx.lineWidth=1;
     const pressureTicks=[1,2,3,5,7,10,20,30,50,70,100,150,200,300,500,700,850,925,1000].filter(p=>p>=minP&&p<=maxP);
@@ -316,13 +325,13 @@
     if(kind==="single")groups=groups.filter(k=>!k.endsWith("_ens")&&k!=="gefs");else groups=groups.filter(k=>k.endsWith("_ens")||k==="gefs");
     let entries=groups.map(k=>[k,s.data?.verification?.[k]?.[period]]).filter(x=>x[1]);if(!entries.length){let runs=groups.reduce((n,k)=>n+Object.keys(s.data?.archive?.[k]||{}).length,0),obs=Object.keys(s.data?.analysis||{}).length;$("#accuracy-chart").innerHTML='<div class="chart-empty compact"><div><strong>Verifica non ancora calcolabile</strong>Per questo modello e periodo non ci sono previsioni e analisi abbinate alla stessa scadenza. Archivio attuale: '+runs+' run e '+obs+' analisi; i punteggi compariranno quando le scadenze previste saranno osservabili.</div></div>';return}
     $("#accuracy-chart").innerHTML='<div class="mobile-scroll"><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left">Modello</th><th>Campioni</th><th>Bias</th><th>MAE</th><th>RMSE</th></tr></thead><tbody>'+entries.map(([k,v])=>'<tr><td>'+ (names[k]||k)+'</td><td>'+v.n+'</td><td>'+fmt(v.biasMs)+'</td><td>'+fmt(v.maeMs)+'</td><td>'+fmt(v.rmseMs)+'</td></tr>').join("")+'</tbody></table></div><p style="font-size:11px;color:var(--muted)">Verifica di U60 contro l’analisi operativa IFS · '+(period==="30d"?"ultimi 30 giorni":"archivio stagionale")+'; punteggi accumulati dall’attivazione.</p><div id="verification-plot" style="min-height:220px"></div>';
-    let availableLeads=[240,168,336].filter(h=>entries.some(([,v])=>(v.samples||[]).some(p=>p.leadHours===h))),lead=availableLeads[0];
-    if(lead){let forecastSeries=entries.map(([k,v])=>({name:(names[k]||k)+" · previsione +"+Math.round(lead/24)+"g",color:colors[k]||"#0876ad",points:(v.samples||[]).filter(p=>p.leadHours===lead).map(p=>({x:p.valid,y:p.forecast}))})).filter(x=>x.points.length),analysisPoints=[...new Map(entries.flatMap(([,v])=>(v.samples||[]).filter(p=>p.leadHours===lead).map(p=>[p.valid,{x:p.valid,y:p.analysis}]))).values()];if(analysisPoints.length)forecastSeries.unshift({name:"Analisi IFS",color:"#20384b",points:analysisPoints});chart($("#verification-plot"),forecastSeries,"m/s",true,{title:"Confronto in raccolta",message:"Non ci sono ancora abbastanza scadenze verificate per tracciare una serie."})}
+    const leadCounts=new Map();entries.forEach(([,v])=>(v.samples||[]).forEach(p=>leadCounts.set(Number(p.leadHours),(leadCounts.get(Number(p.leadHours))||0)+1)));const lead=[...leadCounts].sort((a,b)=>b[1]-a[1]||a[0]-b[0])[0]?.[0],leadLabel=lead<48?"+"+lead+" h":"+"+Math.round(lead/24)+" g";
+    if(lead!=null){let forecastSeries=entries.map(([k,v])=>({name:(names[k]||k)+" · previsione "+leadLabel,color:colors[k]||"#0876ad",points:(v.samples||[]).filter(p=>Number(p.leadHours)===lead).map(p=>({x:p.valid,y:p.forecast})),maxGapHours:48,allowPoints:true})).filter(x=>x.points.length),analysisPoints=[...new Map(entries.flatMap(([,v])=>(v.samples||[]).filter(p=>Number(p.leadHours)===lead).map(p=>[p.valid,{x:p.valid,y:p.analysis}]))).values()];if(analysisPoints.length)forecastSeries.unshift({name:"Analisi IFS",color:"#20384b",points:analysisPoints,maxGapHours:48,allowPoints:true});chart($("#verification-plot"),forecastSeries,"m/s",true,{title:"Confronto in raccolta",message:"Le scadenze verificate sono indicate con punti; le linee compaiono solo dove i campioni sono sufficientemente ravvicinati."})}
     else {const plot=$("#verification-plot");if(plot)plot.outerHTML='<div class="chart-empty compact"><div><strong>Confronto in raccolta</strong>Non sono ancora disponibili scadenze comuni sufficienti per il grafico.</div></div>'}
   }
   function render(){renderStrength();renderMaps();renderVertical();renderAccuracy()}
   function renderNextRefresh(){
-    const now=new Date(),slots=[2,8,14,20].map(hour=>{const d=new Date(now);d.setUTCHours(hour,17,0,0);if(d<=now)d.setUTCDate(d.getUTCDate()+1);return d}).sort((a,b)=>a-b),next=slots[0],mins=Math.max(0,Math.ceil((next-now)/60000)),hours=Math.floor(mins/60),rest=mins%60;
+    const now=new Date(),slots=[5,11,17,23].map(hour=>{const d=new Date(now);d.setUTCHours(hour,17,0,0);if(d<=now)d.setUTCDate(d.getUTCDate()+1);return d}).sort((a,b)=>a-b),next=slots[0],mins=Math.max(0,Math.ceil((next-now)/60000)),hours=Math.floor(mins/60),rest=mins%60;
     const local=new Intl.DateTimeFormat("it-IT",{weekday:"short",day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Europe/Rome"}).format(next);
     $("#next-refresh").textContent="Prossimo controllo automatico previsto tra "+(hours?hours+" h ":"")+rest+" min ("+local+")";
   }
@@ -330,8 +339,8 @@
     try{
       let r=await fetch("/data/dashboard.json",{cache:"no-store"});if(!r.ok)throw new Error("Feed non pronto");s.data=await r.json();
       let available=Object.entries(s.data.sources||{}).filter(([,source])=>source.init);
-      const runItems=available.map(([key,source])=>"<strong>"+(names[key]||key)+(key.endsWith("_ens")||key==="gefs"?" · serie media":"")+" "+dateTime(source.init)+(source.status==="stale"?" · run atteso "+dateTime(source.expectedInit):!source.available?" · serie non disponibile":"")+"</strong>");
-      ["ecmwf_ens","aifs_ens","gefs"].forEach(key=>{const memberRun=s.data.probabilities?.[key]?.run;if(memberRun){runItems.push("<strong>"+(names[key]||key)+" · membri "+dateTime(memberRun)+(s.data.sources?.[key]?.expectedInit&&Date.parse(memberRun)<Date.parse(s.data.sources[key].expectedInit)?" · ciclo atteso "+dateTime(s.data.sources[key].expectedInit):"")+"</strong>")}});
+      const runItems=available.map(([key,source])=>{const expected=latestExpectedCycleFor(key);const behind=expected&&Date.parse(source.init)<expected;return "<strong>"+(names[key]||key)+(key.endsWith("_ens")||key==="gefs"?" · serie media":"")+" "+dateTime(source.init)+(behind?" · ciclo atteso "+dateTime(new Date(expected).toISOString()):source.status==="stale"&&source.expectedInit?" · run atteso "+dateTime(source.expectedInit):!source.available?" · serie non disponibile":"")+"</strong>"});
+      ["ecmwf_ens","aifs_ens","gefs"].forEach(key=>{const memberRun=s.data.probabilities?.[key]?.run;if(memberRun){const expected=latestExpectedCycleFor(key);runItems.push("<strong>"+(names[key]||key)+" · membri "+dateTime(memberRun)+(expected&&Date.parse(memberRun)<expected?" · ciclo atteso "+dateTime(new Date(expected).toISOString()):"")+"</strong>")}});
       $("#runline").innerHTML=runItems.join(" · ");
       const update=s.data.updateStatus||{};
       const stale=Object.entries(s.data.sources||{}).filter(([,source])=>source.status!=="current");
@@ -349,8 +358,9 @@
       }
       const feedAgeHours=(Date.now()-Date.parse(s.data.generatedAt))/3600000;
       if(Number.isFinite(feedAgeHours)&&feedAgeHours>9){
-        const age=Math.floor(feedAgeHours)+" h";
-        $("#feed-status").textContent="Feed non aggiornato da "+age+". I dati visibili sono quelli dell’ultima elaborazione ("+new Date(s.data.generatedAt).toLocaleString("it-IT",{timeZone:"UTC"})+" UTC); il nuovo controllo automatico non risulta ancora completato.";
+        const age=Math.floor(feedAgeHours)+" h",behind=available.filter(([key,source])=>latestExpectedCycleFor(key)>Date.parse(source.init)).map(([key])=>names[key]||key);
+        const expectedText=behind.length?" Ciclo atteso non ancora acquisito per: "+behind.join(", ")+".":"";
+        $("#feed-status").textContent="Feed non aggiornato da "+age+". I dati visibili sono quelli dell’ultima elaborazione ("+new Date(s.data.generatedAt).toLocaleString("it-IT",{timeZone:"UTC"})+" UTC); il nuovo controllo automatico non risulta ancora completato."+expectedText;
         $("#updated").textContent="Feed fermo da "+age+" · ultimo aggiornamento "+new Date(s.data.generatedAt).toLocaleString("it-IT",{timeZone:"UTC"})+" UTC";
         $("#runline .live-dot")?.classList.add("stale");
       }else{
@@ -371,22 +381,22 @@
       $("#ssw-value").textContent=at14.map(x=>rowNames[x.k]+": "+x.row.membersBelowZero+" membri su "+x.row.members+" ("+pct(x.row)+") a +14 giorni; run "+date(s.data.probabilities[x.k].run)).join(" · ")||"Nessun membro valido disponibile per la scadenza +14 giorni.";
       if(probRows.length){
         const leads=[168,240,288,336],models=[...new Set(probRows.map(x=>x.k))],cell=(k,lead)=>{const x=probRows.find(item=>item.k===k&&Number(item.row.leadHours)===lead);return !x||!x.row.members?'<span title="Nessun membro valido acquisito per questo lead">n/d</span>':x.row.membersBelowZero+'/'+x.row.members+' · '+pct(x.row)};
-        const missing=models.filter(k=>{const rows=probRows.filter(x=>x.k===k);return !rows.some(x=>x.row.members>0)}).map(k=>{const source=s.data.sources?.[k],feed=s.data.probabilities?.[k];return rowNames[k]+': nessun membro valido acquisito'+(feed?.run?' nell’ultimo campione ('+ensembleRunDescription(k,feed.run)+')':'')+(source?.status==='stale'?' · feed in ritardo':'')}).join(' · ');
-        $("#odds-table").innerHTML='<div class="mobile-scroll"><table class="prob-table" style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left">Ensemble</th>'+leads.map(lead=>'<th>+'+Math.round(lead/24)+' g</th>').join('')+'</tr></thead><tbody>'+models.map(k=>'<tr><td>'+rowNames[k]+'</td>'+leads.map(lead=>'<td>'+cell(k,lead)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div><small style="display:block;margin-top:7px;color:var(--muted)">U60&lt;0 indica vento orientale a 60°N e 10 hPa. Quota grezza dei membri disponibili, non probabilità calibrata di SSW.</small>'+(missing?'<small style="display:block;margin-top:6px;color:#a64b16">'+missing+'. Percentuali non calcolabili: nessun valore sostitutivo viene stimato.</small>':'');
+        const missing=models.filter(k=>{const rows=probRows.filter(x=>x.k===k);return !rows.some(x=>x.row.members>0)}).map(k=>{const source=s.data.sources?.[k],feed=s.data.probabilities?.[k],attempt=s.data.gefsMemberStatus;const detail=k==='gefs'&&attempt?.error?' · ultimo tentativo: '+String(attempt.error).slice(0,180):source?.status==='stale'?' · feed in ritardo':'';return rowNames[k]+': nessun membro valido acquisito'+(feed?.run?' nell’ultimo campione ('+ensembleRunDescription(k,feed.run)+')':'')+detail}).join(' · ');
+        $("#odds-table").innerHTML='<div class="mobile-scroll"><table class="prob-table" style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left">Ensemble</th>'+leads.map(lead=>'<th>+'+Math.round(lead/24)+' g</th>').join('')+'</tr></thead><tbody>'+models.map(k=>'<tr><td>'+rowNames[k]+'</td>'+leads.map(lead=>'<td>'+cell(k,lead)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div><small style="display:block;margin-top:7px;color:var(--muted)">U60&lt;0 indica vento orientale a 60°N e 10 hPa. Quota grezza dei membri disponibili, non probabilità calibrata di SSW.</small>'+(missing?'<small style="display:block;margin-top:6px;color:#a64b16">'+escapeHtml(missing)+'. Percentuali non calcolabili: nessun valore sostitutivo viene stimato.</small>':'');
       } else {$("#odds-table").innerHTML='<div class="chart-empty" style="min-height:100px"><div><strong>Feed ensemble non ancora disponibile</strong>Non mostriamo percentuali finché il modello non fornisce membri utilizzabili.</div></div>'}
       renderStatusSummary();
       render();
     }catch(e){$("#feed-status").textContent=s.data?"Impossibile aggiornare il feed: restano visibili i dati già caricati.":"Feed non disponibile: il primo aggiornamento dipende dall’esecuzione della pipeline."}
   }
-  $$("[data-model]").forEach(b=>b.addEventListener("click",()=>{s.model=b.dataset.model;renderStrength();renderVertical()}));
+  $$("[data-model]").forEach(b=>b.addEventListener("click",()=>{s.model=b.dataset.model;normalizeStrengthSelection();renderStrength();renderVertical()}));
   $$("[data-view]").forEach(b=>b.addEventListener("click",()=>{$$("[data-view]").forEach(x=>x.setAttribute("aria-selected",String(x===b)));$$(".view-section").forEach(x=>x.classList.toggle("hidden",x.id!=="view-"+b.dataset.view));if(b.dataset.view==="maps")renderMaps();if(b.dataset.view==="vertical")renderVertical();if(b.dataset.view==="accuracy")renderAccuracy()}));
-  $$("[data-forecast]").forEach(b=>b.addEventListener("click",()=>{s.kind=b.dataset.forecast;renderStrength()}));
-  $$("[data-chart]").forEach(b=>b.addEventListener("click",()=>{s.chart=b.dataset.chart;renderStrength()}));
+  $$("[data-forecast]").forEach(b=>b.addEventListener("click",()=>{s.kind=b.dataset.forecast;normalizeStrengthSelection();renderStrength()}));
+  $$("[data-chart]").forEach(b=>b.addEventListener("click",()=>{s.chart=b.dataset.chart;normalizeStrengthSelection();renderStrength()}));
   $("#map-model")?.addEventListener("change",renderMaps);
   $$("[data-level]").forEach(b=>b.addEventListener("click",()=>{s.level=b.dataset.level;renderMaps()}));
   $$("[data-field]").forEach(b=>b.addEventListener("click",()=>{s.mapField=b.dataset.field;renderMaps()}));
   const shiftMapStep=delta=>{let r=$("#map-step");r.value=Math.max(Number(r.min),Math.min(Number(r.max),Number(r.value)+delta));r.dispatchEvent(new Event("input"))};
-  $("#map-step")?.addEventListener("input",e=>{s.step=Number(e.target.value);renderMaps()});
+  $("#map-step")?.addEventListener("input",e=>{s.step=mapAvailableSteps[Number(e.target.value)]??mapAvailableSteps[0];renderMaps()});
   $("#map-prev")?.addEventListener("click",()=>shiftMapStep(-1));
   $("#map-next")?.addEventListener("click",()=>shiftMapStep(1));
   $("#map-display")?.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"){e.preventDefault();shiftMapStep(-1)}else if(e.key==="ArrowRight"){e.preventDefault();shiftMapStep(1)}});

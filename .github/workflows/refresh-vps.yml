@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,8 +38,8 @@ jobs:
       - name: Restore climatology cache
         uses: actions/cache@v4
         with:
-          path: public/data/climatology.npz
-          key: vps-climatology-ncep-r1-1991-2020-v3
+          path: public/data/climatology-v2.npz
+          key: vps-climatology-ncep-r1-1991-2020-v4
       - name: Install GRIB tools and libraries
         run: |
           sudo apt-get update

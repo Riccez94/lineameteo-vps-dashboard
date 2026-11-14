@@ -137,7 +137,7 @@ def polar_cap(da: xr.DataArray) -> xr.DataArray:
 
 def ensure_climatology() -> None:
     """Build a compact 1991–2020 monthly baseline from public NOAA PSL NCEP R1 data."""
-    path = DATA / "climatology.npz"
+    path = DATA / "climatology-v2.npz"
     if not path.exists():
         DATA.mkdir(parents=True, exist_ok=True)
         base = "https://psl.noaa.gov/thredds/dodsC/Datasets/ncep.reanalysis/Monthlies/pressure/"
@@ -530,74 +530,89 @@ def fetch_noaa(model_key: str, noaa_model: str, product: str, member: str | None
 def fetch_gefs_raw_odds(init: dt.datetime, out: dict) -> None:
     """Sample the GEFS control and 30 perturbed members at days 7, 10, 12 and 14."""
     from herbie import Herbie
+    expected_init = init
+    diagnostics: list[str] = []
     # NOAA GEFS requires one public-file request per member and lead; keep its
     # established checkpoints to avoid multiplying hundreds of downloads.
     leads = (168, 240, 288, 336)
-    def sample_lead(run: dt.datetime, lead: int, directory: str) -> dict[str, float]:
+    members = ("c00", *(f"p{n:02d}" for n in range(1, 31)))
+    def sample_lead(run: dt.datetime, lead: int, directory: str,
+                    requested_members: tuple[str, ...] = members) -> dict[str, float]:
         values: dict[str, float] = {}
         failures: list[str] = []
-        for member in ("c00", *(f"p{n:02d}" for n in range(1, 31))):
-            key = member
+        def sample_member(member: str) -> tuple[str, float | None, str | None]:
             try:
-                h = Herbie(herbie_init(run), model="gefs", product="atmos.5", member=key, fxx=lead,
+                h = Herbie(herbie_init(run), model="gefs", product="atmos.5", member=member, fxx=lead,
                            save_dir=directory, verbose=False)
                 path = h.download(searchString=":UGRD:10 mb:", verbose=False)
                 if path is None:
-                    failures.append(f"{key}: no matching GRIB message")
-                    continue
+                    return member, None, "no matching GRIB message"
                 try:
                     ds = open_grib(Path(path))
                 except Exception:
-                    # Some NOAA GEFS GRIB editions label the pressure surface
-                    # differently; the downloaded subset contains only UGRD 10 mb.
+                    # NOAA GRIB editions can label the pressure surface differently.
                     ds = xr.open_dataset(Path(path), engine="cfgrib", backend_kwargs={"indexpath": "", "errors": "raise"})
                 try:
                     uname = var_name(ds, ("u", "u_grd"))
                     if not uname:
                         raise RuntimeError("UGRD variable not found in the selected GRIB")
                     field = pressure(ds, 10)[uname]
-                    # Herbie fxx selects the GEFS forecast file. Prefer the exact
-                    # lead when present; accept a single-step file only when its
-                    # own metadata agrees with that requested lead.
-                    if "step" in field.coords or "step" in field.dims:
-                        step_values = np.atleast_1d(field["step"].values)
-                        hours = [int(value / np.timedelta64(1, "h")) if np.issubdtype(step_values.dtype, np.timedelta64)
-                                 else int(value) for value in step_values]
-                        if lead in hours:
-                            field = field.sel(step=step_values[hours.index(lead)])
-                        elif len(hours) == 1 and hours[0] == lead:
-                            field = field.isel(step=0) if "step" in field.dims else field
-                        else:
-                            raise RuntimeError(f"GEFS file f{lead:03d} reports steps {hours}")
-                    else:
+                    if "step" not in field.coords and "step" not in field.dims:
                         raise RuntimeError("GEFS UGRD field has no forecast-step coordinate")
-                    values[key] = u60(field)
+                    step_values = np.atleast_1d(field["step"].values)
+                    hours = [int(value / np.timedelta64(1, "h")) if np.issubdtype(step_values.dtype, np.timedelta64)
+                             else int(value) for value in step_values]
+                    if lead in hours:
+                        field = field.sel(step=step_values[hours.index(lead)])
+                    elif len(hours) == 1 and hours[0] == lead:
+                        field = field.isel(step=0) if "step" in field.dims else field
+                    else:
+                        raise RuntimeError(f"GEFS file f{lead:03d} reports steps {hours}")
+                    return member, u60(field), None
                 finally:
                     ds.close()
-            except Exception as e:
-                failures.append(f"{key}: {type(e).__name__}: {e}")
-        LOG.info("GEFS %s +%sh: %s/31 members yielded a valid U60 sample", run, lead, len(values))
+            except Exception as exc:
+                return member, None, f"{type(exc).__name__}: {exc}"
+        # A small bounded pool prevents one network request per member from
+        # serializing the entire dashboard refresh or exhausting NOAA mirrors.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [pool.submit(sample_member, member) for member in requested_members]
+            for future in as_completed(futures):
+                member, value, error = future.result()
+                if value is not None and np.isfinite(value):
+                    values[member] = value
+                elif error:
+                    failures.append(f"{member}: {error}")
+        LOG.info("GEFS %s +%sh: %s/%s members yielded a valid U60 sample", run, lead, len(values), len(requested_members))
         if not values and failures:
             LOG.warning("GEFS %s +%sh sample examples: %s", run, lead, "; ".join(failures[:3]))
+        diagnostics.append(f"{run:%Y-%m-%d %H} UTC +{lead} h: {len(values)}/{len(requested_members)} membri" +
+                           (f"; {failures[0]}" if failures else ""))
         return values
 
     # The GEFS ensemble files can lag the control/mean run. Probe the expected
     # +7-day field, then step back by 6 h until a real member sample is found.
-    # This prevents a just-started cycle from replacing good probabilities with
-    # empty rows while keeping the sample and its displayed run timestamp honest.
+    # Probe five members spread across the ensemble, then retrieve all members
+    # only for the selected run. This prevents a delayed cycle from replacing
+    # good probabilities and avoids four full 31-member scans on every refresh.
     member_paths: dict[str, dict[int, float]] = {}
     chosen_init: dt.datetime | None = None
+    probe_members = ("c00", "p01", "p08", "p16", "p30")
     with tempfile.TemporaryDirectory(prefix="lm-gefs-members-") as tmp:
         for offset in (0, 6, 12, 18):
             candidate = init - dt.timedelta(hours=offset)
-            initial = sample_lead(candidate, leads[0], tmp)
+            initial = sample_lead(candidate, leads[0], tmp, probe_members)
             if initial:
                 chosen_init = candidate
-                member_paths = {key: {leads[0]: value} for key, value in initial.items()}
                 break
         if chosen_init is None:
+            message = "Nessun membro GEFS acquisito al lead +168 h nei quattro cicli testati."
             LOG.warning("GEFS member fields unavailable for %s and the previous 18 h; retaining the last valid ensemble sample", init)
+            out["gefsMemberStatus"] = {"status": "unavailable", "expectedRun": expected_init.strftime("%Y-%m-%dT%H:%MZ"),
+                                       "attemptedAt": utcnow().isoformat(), "error": message, "details": diagnostics[-4:]}
             return
+        member_paths = {key: {leads[0]: value} for key, value in sample_lead(chosen_init, leads[0], tmp).items()}
         for lead in leads[1:]:
             for key, value in sample_lead(chosen_init, lead, tmp).items():
                 member_paths.setdefault(key, {})[lead] = value
@@ -613,6 +628,13 @@ def fetch_gefs_raw_odds(init: dt.datetime, out: dict) -> None:
     out.setdefault("probabilities", {})["gefs"] = {"source": "NOAA GEFS", "run": init_iso, "sampledLeadsHours": list(leads),
                                                      "method": "quota grezza membri con U60<0 ai lead campionati; non probabilità calibrata",
                                                      "rows": rows, "series": series}
+    missing = [(row["leadHours"], row["members"]) for row in rows if row["members"] < 31]
+    out["gefsMemberStatus"] = {"status": "delayed" if init < expected_init else "partial" if missing else "current",
+                               "expectedRun": expected_init.strftime("%Y-%m-%dT%H:%MZ"), "sampleRun": init_iso,
+                               "validMembersByLead": {str(row["leadHours"]): row["members"] for row in rows},
+                               "attemptedAt": utcnow().isoformat(),
+                               "error": ("Run GEFS in ritardo rispetto al ciclo atteso." if init < expected_init else
+                                         "Campione incompleto: " + ", ".join(f"+{lead} h {members}/31" for lead, members in missing) if missing else None)}
 
 
 def fetch_aifs_ensemble_odds(init: dt.datetime, out: dict) -> None:
@@ -767,6 +789,7 @@ def main() -> None:
                 out["sources"] = previous.get("sources", {})
                 out["probabilities"] = previous.get("probabilities", {})
                 out["hindcast"] = previous.get("hindcast")
+                out["gefsMemberStatus"] = previous.get("gefsMemberStatus")
         except Exception:
             LOG.warning("Previous dashboard state could not be loaded")
     now = utcnow()
@@ -836,8 +859,15 @@ def main() -> None:
     if old_gefs_ens.get("run") != expected_gefs_ens or not old_gefs_ens.get("series"):
         try:
             fetch_gefs_raw_odds(cycle_noaa, out)
-        except Exception:
+        except Exception as exc:
             LOG.exception("Could not prepare GEFS member statistics")
+            out["gefsMemberStatus"] = {
+                "status": "unavailable",
+                "expectedRun": expected_gefs_ens,
+                "sampleRun": old_gefs_ens.get("run"),
+                "attemptedAt": utcnow().isoformat(),
+                "error": f"Acquisizione GEFS non completata: {type(exc).__name__}: {exc}",
+            }
 
     expected_ens_run = cycle_ifs.strftime("%Y-%m-%dT%H:%MZ")
     old_ecmwf_ens = out.get("probabilities", {}).get("ecmwf_ens", {})
