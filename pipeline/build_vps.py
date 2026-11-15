@@ -880,7 +880,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     DATA.mkdir(parents=True, exist_ok=True)
     ensure_climatology()
-    out = {"schema": DATA_SCHEMA, "metricVersion": METRIC_VERSION, "generatedAt": None, "models": {}, "sources": {}, "verification": {}, "probabilities": {}, "hindcast": None}
+    out = {"schema": DATA_SCHEMA, "metricVersion": METRIC_VERSION, "generatedAt": None, "models": {}, "sources": {}, "verification": {}, "probabilities": {}, "hindcast": None,
+           "climatology": {"u10Monthly": [climatology_cap("uwnd", month, 10) for month in range(1, 13)]}}
     old_path = DATA / "dashboard.json"
     if old_path.exists():
         try:
