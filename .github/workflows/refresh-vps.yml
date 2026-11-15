@@ -123,11 +123,17 @@ jobs:
                   removed += 1
           print(f"Retained {len(wanted)} referenced maps; removed {removed} superseded images.")
           PY
+      - name: Build Linea Meteo forum version
+        # Versione della pagina per il forum Linea Meteo (public/lm: contenuto, stile e programma
+        # caricati dal blocco CMS del forum). Se l'adattamento non riesce restano i file
+        # dell'ultima versione buona e il workflow prosegue normalmente.
+        continue-on-error: true
+        run: python pipeline/lm_forum/build_lm.py public public/lm
       - name: Publish generated dashboard data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/data/dashboard.json public/data/history.json public/data/ifs_s2s_hindcast.json
+          git add public/data/dashboard.json public/data/history.json public/data/ifs_s2s_hindcast.json public/lm
           if ! git diff --cached --quiet; then
             git commit -m "Update VPS model data and maps"
             git push origin HEAD:main
