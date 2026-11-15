@@ -198,7 +198,7 @@
       const monthly=s.data.climatology?.u10Monthly;
       const normal=monthlyU60Normal(Math.min(...timeline),Math.max(...timeline),monthly);
       const fallback=which.flatMap(k=>(s.data.models?.[k]?.series||[]).filter(p=>num(p.u10normal)!==null).map(p=>({x:p.valid,y:num(p.u10normal)})));
-      chart($("#strength-chart"),[...references,...forecasts,{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal.length?normal:fallback,maxGapHours:48}],"m/s",true,{title:"Serie U60 in raccolta",message:"Archivio storico o previsioni non ancora sufficienti. Sono mostrati soltanto i campioni effettivamente disponibili."});
+      chart($("#strength-chart"),[...references,...forecasts,{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal.length?normal:fallback,maxGapHours:normal.length?32*24:48}],"m/s",true,{title:"Serie U60 in raccolta",message:"Archivio storico o previsioni non ancora sufficienti. Sono mostrati soltanto i campioni effettivamente disponibili."});
     }
     else {
       const forecasts=modelSeries(which,field);
