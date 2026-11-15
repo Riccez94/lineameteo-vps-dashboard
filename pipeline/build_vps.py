@@ -122,6 +122,17 @@ def var_name(ds: xr.Dataset, candidates: tuple[str, ...]) -> str | None:
 
 def pressure(ds: xr.Dataset, level: int) -> xr.Dataset:
     lev = coord(ds, ("isobaricInhPa", "pressure_level", "level"))
+    coordinate = ds[lev]
+    # A GRIB subset containing exactly one isobaric level is commonly decoded
+    # by cfgrib with a scalar coordinate (for example isobaricInhPa=10), not a
+    # one-element dimension. xarray cannot build a PandasIndex for that scalar,
+    # so .sel(method="nearest") fails even though the requested field exists.
+    # This affected every single-level GEFS member request and some ENS files.
+    if coordinate.ndim == 0:
+        actual = float(coordinate.values)
+        if not np.isfinite(actual) or abs(actual - level) > max(0.05, level * 0.01):
+            raise KeyError(f"Requested {level} hPa, but GRIB contains scalar {lev}={actual}")
+        return ds
     # GRIB/xarray coordinates can contain floating pressure values (for example
     # 9.999999 instead of 10); select the nearest level only within 1%.
     return ds.sel({lev: level}, method="nearest", tolerance=max(0.05, level * 0.01))

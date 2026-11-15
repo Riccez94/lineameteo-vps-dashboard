@@ -178,7 +178,7 @@
     $("#strength-subtitle").textContent=s.chart==="hindcast"?"Fascia: 10°–90° dei membri hindcast ECMWF 2006–2025, con inizializzazioni vicine a questa data dell’anno. La media ENS operativa è mostrata soltanto fino alla sua ultima scadenza disponibile; la climatologia non è una previsione a 46 giorni.":s.kind==="ensemble"&&s.chart==="wind"?"Linea: media dei membri. Fascia: percentili 10°–90°. La tabella riporta separatamente la quota grezza dei membri con U60<0; non è una probabilità calibrata di SSW.":s.kind==="ensemble"&&s.chart==="temperature"?"Media della temperatura a 10 hPa tra 55° e 65°N. Linea: media dei membri; fascia: percentili 10°–90°. Mostriamo solo i modelli che forniscono i campi necessari.":s.chart==="temperature"?"Temperatura media tra 55° e 65°N a 10 hPa. Sono mostrate solo le previsioni effettivamente disponibili.":s.chart==="trend"?"Confronto delle ultime emissioni archiviate: ogni curva è un run distinto. Le differenze mostrano come è cambiata la previsione.":s.chart==="season"?"Serie temporale disponibile: analisi archiviate e previsioni fino a circa 15 giorni. Non rappresenta l’intera stagione; la linea dello zero separa venti occidentali e orientali.":"Vento zonale medio a 60°N e 10 hPa. Sopra lo zero soffiano venti occidentali; sotto lo zero, venti orientali.";
     if(s.chart==="season"){
       const n=Object.keys(s.data.analysis||{}).length,fc=modelSeries(which,"u10").reduce((sum,a)=>sum+a.points.length,0),latest=Math.max(0,...which.flatMap(k=>(s.data.models?.[k]?.series||[]).map(p=>Number(p.leadHours)||0)));
-      $("#strength-subtitle").textContent+=" Archivio: "+n+" analisi; run disponibile fino a +"+Math.round(latest/24)+" giorni; "+fc+" punti di previsione. Non è disponibile un’indicazione affidabile per l’intera stagione.";
+      $("#strength-subtitle").textContent+=" Archivio: "+n+" analisi; run disponibile fino a +"+Math.round(latest/24)+" giorni; "+fc+" punti di previsione. I tratti interrotti indicano analisi non archiviate e non vengono ricostruiti. Non è disponibile un’indicazione affidabile per l’intera stagione.";
     }
     let avail=which.filter(k=>s.data.sources?.[k]?.available&&s.data.models?.[k]?.series?.length);$("#strength-freshness").textContent=s.chart==="hindcast"?(s.data.hindcast?.available?"Hindcast ECMWF IFS · "+s.data.hindcast.firstYear+"–"+s.data.hindcast.lastYear+" · "+s.data.hindcast.initSamples+" inizializzazioni stagionali · aggiornato "+dateTime(s.data.hindcast.generatedAt):"Climatologia hindcast ECMWF non disponibile nel feed."):s.kind==="ensemble"&&s.chart==="wind"&&ensembleWindSeries(which).length?which.map(k=>{let f=s.data.probabilities?.[k];return f?.series?.length?names[k]+" · "+dateTime(f.run)+" · "+f.series.length+" scadenze":""}).filter(Boolean).join(" | ")+" · GEFS ai lead campionati.":avail.map(k=>names[k]+" · "+runDescription(k,s.data.sources[k].init)).join(" | ")||(s.kind==="ensemble"?"Nessun membro ensemble utilizzabile per questa selezione.":"Serie non disponibile per "+which.map(k=>names[k]||k).join(", ")+". Il feed del modello non contiene campioni utilizzabili in questa modalità.");
     let wave=which.map(k=>({name:names[k],color:colors[k],points:(s.data.models[k]?.series||[]).filter(p=>num(p.heatFlux100)!==null).map(p=>({x:p.valid,y:num(p.heatFlux100)})),maxGapHours:48})).filter(x=>x.points.length);
@@ -294,15 +294,63 @@
     const colorAt=v=>{let t=Math.max(lo,Math.min(hi,v)),i=palette.findIndex(p=>t<=p[0]);if(i<=0)return palette[0][1];if(i<0)return palette.at(-1)[1];const [a,ca]=palette[i-1],[b,cb]=palette[i],f=(t-a)/(b-a||1);return ca.map((c,j)=>Math.round(c+(cb[j]-c)*f))};
     const W=1280,H=670,L=92,R=94,T=48,B=128,PW=W-L-R,PH=H-T-B,minP=Math.min(...levels),maxP=Math.max(...levels),times=rows.map(r=>Date.parse(r.valid)),t0=times[0],t1=times.at(-1);
     const xTime=t=>L+(t-t0)/(t1-t0||1)*PW, yPressure=p=>T+Math.log(p/minP)/Math.log(maxP/minP)*PH;
-    const rowAt=(r,p)=>{const pts=levels.map(l=>({p:l,v:num(r[valueKey(l)])})).filter(x=>x.v!==null).sort((a,b)=>a.p-b.p);if(!pts.length||p<pts[0].p||p>pts.at(-1).p)return null;for(let i=1;i<pts.length;i++){if(p<=pts[i].p){const a=pts[i-1],b=pts[i],ratio=b.p/a.p;if(ratio>2.25)return null;const f=Math.log(p/a.p)/Math.log(b.p/a.p);return a.v+(b.v-a.v)*f}}return pts.at(-1).v};
+    const pressureLevels=levels.slice().sort((a,b)=>a-b);
+    const rowAt=(r,p)=>{
+      let lower=null;
+      for(const level of pressureLevels){
+        const value=num(r[valueKey(level)]);
+        if(value===null)continue;
+        if(level===p)return value;
+        if(level>p){
+          if(!lower)return null;
+          const f=Math.log(p/lower.p)/Math.log(level/lower.p);
+          return lower.v+(value-lower.v)*f;
+        }
+        lower={p:level,v:value};
+      }
+      return null;
+    };
     const sample=(time,p)=>{if(time<times[0]||time>times.at(-1))return null;let loIndex=0,hiIndex=times.length-1;while(loIndex<hiIndex){const mid=(loIndex+hiIndex)>>1;if(times[mid]<time)loIndex=mid+1;else hiIndex=mid}const i=loIndex;if(times[i]===time)return rowAt(rows[i],p);if(i===0)return null;const a=times[i-1],b=times[i];if(b-a>48*3600000)return null;const va=rowAt(rows[i-1],p),vb=rowAt(rows[i],p);if(va===null||vb===null)return null;const f=(time-a)/(b-a);return va+(vb-va)*f};
     const container=$("#vertical-chart");container.innerHTML='<canvas id="vertical-canvas" role="img" aria-label="'+fieldName+' in sezione verticale: pressione in hPa a sinistra, quota approssimata in km a destra, tempo UTC da sinistra a destra."></canvas><div class="chart-tooltip" hidden></div>';container.classList.add("vertical-box");container.style.position="relative";
     const canvas=$("#vertical-canvas"),dpr=Math.min(2,window.devicePixelRatio||1);canvas.width=W*dpr;canvas.height=H*dpr;canvas.style.width="100%";canvas.style.height="auto";const ctx=canvas.getContext("2d");ctx.scale(dpr,dpr);ctx.fillStyle="#fff";ctx.fillRect(0,0,W,H);
-    const rasterW=Math.round(PW*dpr),rasterH=Math.round(PH*dpr),image=ctx.createImageData(rasterW,rasterH);for(let py=0;py<rasterH;py++){const p=minP*Math.pow(maxP/minP,py/(rasterH-1));for(let px=0;px<rasterW;px++){const t=t0+(t1-t0)*px/(rasterW-1),v=sample(t,p);if(v===null)continue;const c=colorAt(v),n=(py*rasterW+px)*4;image.data[n]=c[0];image.data[n+1]=c[1];image.data[n+2]=c[2];image.data[n+3]=255}}ctx.putImageData(image,L*dpr,T*dpr);
+    // Build the scientific field once per input time and pressure row. The old
+    // pixel loop repeatedly allocated/sorted pressure profiles and binary
+    // searched the time axis for every pixel, which could lock the UI for
+    // several seconds on high-DPI screens. Rasterize at CSS resolution, then
+    // let the browser scale the finished bitmap to the display density.
+    const rasterW=Math.max(1,Math.round(PW)),rasterH=Math.max(1,Math.round(PH));
+    const profiles=rows.map(row=>Array.from({length:rasterH},(_,py)=>{
+      const p=minP*Math.pow(maxP/minP,py/(rasterH-1||1));
+      return rowAt(row,p);
+    }));
+    const image=ctx.createImageData(rasterW,rasterH);
+    let timeIndex=0;
+    for(let px=0;px<rasterW;px++){
+      const time=t0+(t1-t0)*px/(rasterW-1||1);
+      while(timeIndex<times.length-2&&times[timeIndex+1]<time)timeIndex++;
+      const exact=times[timeIndex]===time?timeIndex:times[timeIndex+1]===time?timeIndex+1:-1;
+      const next=exact>=0?exact:timeIndex+1;
+      const gap=exact>=0||next>=times.length||times[next]-times[timeIndex]<=48*3600000;
+      const fraction=exact>=0?0:(time-times[timeIndex])/(times[next]-times[timeIndex]||1);
+      if(!gap)continue;
+      for(let py=0;py<rasterH;py++){
+        const a=profiles[exact>=0?exact:timeIndex][py],b=profiles[exact>=0?exact:next][py];
+        if(a===null||b===null)continue;
+        const v=exact>=0?a:a+(b-a)*fraction,c=colorAt(v),n=(py*rasterW+px)*4;
+        image.data[n]=c[0];image.data[n+1]=c[1];image.data[n+2]=c[2];image.data[n+3]=255;
+      }
+    }
+    const fieldCanvas=document.createElement("canvas");fieldCanvas.width=rasterW;fieldCanvas.height=rasterH;
+    fieldCanvas.getContext("2d").putImageData(image,0,0);
+    ctx.drawImage(fieldCanvas,L,T,PW,PH);
     ctx.save();ctx.beginPath();ctx.rect(L,T,PW,PH);ctx.clip();
     const interval=scale==="sigma"?.5:scale==="raw"?(s.vfield==="wind"?10:s.vfield==="temperature"?10:2500):(s.vfield==="wind"?5:s.vfield==="temperature"?2:100),contourStart=Math.ceil(lo/interval)*interval;
     ctx.lineWidth=.7;ctx.strokeStyle="rgba(24,49,67,.30)";
-    for(let level=contourStart;level<=hi;level+=interval){for(let i=0;i<rows.length-1;i++){if(times[i+1]-times[i]>48*3600000)continue;for(let j=0;j<levels.length-1;j++){if(levels[j+1]/levels[j]>2.25)continue;const v=[num(rows[i][valueKey(levels[j])]),num(rows[i+1][valueKey(levels[j])]),num(rows[i+1][valueKey(levels[j+1])]),num(rows[i][valueKey(levels[j+1])])];if(v.some(a=>a===null))continue;const points=[[xTime(times[i]),yPressure(levels[j])],[xTime(times[i+1]),yPressure(levels[j])],[xTime(times[i+1]),yPressure(levels[j+1])],[xTime(times[i]),yPressure(levels[j+1])]],cross=[];for(let e=0;e<4;e++){const n=(e+1)%4;if((v[e]<level&&v[n]>=level)||(v[e]>=level&&v[n]<level)){const f=(level-v[e])/(v[n]-v[e]||1);cross.push([points[e][0]+(points[n][0]-points[e][0])*f,points[e][1]+(points[n][1]-points[e][1])*f])}}for(let q=0;q+1<cross.length;q+=2){ctx.beginPath();ctx.moveTo(...cross[q]);ctx.lineTo(...cross[q+1]);ctx.stroke()}}}}
+    // Sample the contour grid uniformly in log-pressure, matching the raster
+    // interpolation and the chart's vertical coordinate (including 10–50 hPa).
+    const contourRows=Math.max(64,levels.length),contourPressures=Array.from({length:contourRows},(_,j)=>minP*Math.pow(maxP/minP,j/(contourRows-1)));
+    const contourProfiles=rows.map(row=>contourPressures.map(p=>rowAt(row,p)));
+    for(let level=contourStart;level<=hi;level+=interval){for(let i=0;i<rows.length-1;i++){if(times[i+1]-times[i]>48*3600000)continue;for(let j=0;j<contourPressures.length-1;j++){const v=[contourProfiles[i][j],contourProfiles[i+1][j],contourProfiles[i+1][j+1],contourProfiles[i][j+1]];if(v.some(a=>a===null))continue;const points=[[xTime(times[i]),yPressure(contourPressures[j])],[xTime(times[i+1]),yPressure(contourPressures[j])],[xTime(times[i+1]),yPressure(contourPressures[j+1])],[xTime(times[i]),yPressure(contourPressures[j+1])]],cross=[];for(let e=0;e<4;e++){const n=(e+1)%4;if((v[e]<level&&v[n]>=level)||(v[e]>=level&&v[n]<level)){const f=(level-v[e])/(v[n]-v[e]||1);cross.push([points[e][0]+(points[n][0]-points[e][0])*f,points[e][1]+(points[n][1]-points[e][1])*f])}}for(let q=0;q+1<cross.length;q+=2){ctx.beginPath();ctx.moveTo(...cross[q]);ctx.lineTo(...cross[q+1]);ctx.stroke()}}}}
     ctx.restore();
     ctx.font="12px Inter, Segoe UI, sans-serif";ctx.fillStyle="#536c7f";ctx.strokeStyle="#d8e1e8";ctx.lineWidth=1;
     const pressureTicks=[1,2,3,5,7,10,20,30,50,70,100,150,200,300,500,700,850,925,1000].filter(p=>p>=minP&&p<=maxP);
@@ -317,7 +365,7 @@
     for(let i=0;i<=4;i++){const v=lo+(hi-lo)*i/4,x=gx+gw*i/4;ctx.fillStyle="#536c7f";ctx.textAlign=i===0?"left":i===4?"right":"center";ctx.font="11px Inter, Segoe UI,sans-serif";ctx.fillText(fmt(v)+(scale==="sigma"?"σ":""),x,gy+28)}
     ctx.fillStyle="#17354e";ctx.textAlign="center";ctx.font="700 12px Inter, Segoe UI,sans-serif";ctx.fillText(fieldName+" · "+scaleName+" · "+unit,gx+gw/2,gy+52);
     const run=model?.init?dateTime(model.init):"run non disponibile",topLevel=minP+" hPa ("+topKm+" km circa)";
-    $("#vertical-description").textContent=modelName+" · run "+run+" · copertura fino a "+topLevel+" · scala logaritmica. Gli intervalli senza colore indicano dati mancanti: non interpoliamo oltre 48 ore.";
+    $("#vertical-description").textContent=modelName+" · run "+run+" · copertura fino a "+topLevel+" · asse logaritmico della pressione. Colori, isolinee e valori intermedi sono interpolati in log-pressione tra i livelli forniti dal modello; i salti temporali oltre 48 ore restano vuoti.";
     const tooltip=container.querySelector(".chart-tooltip");canvas.addEventListener("pointermove",e=>{const box=canvas.getBoundingClientRect(),x=(e.clientX-box.left)/box.width*W,y=(e.clientY-box.top)/box.height*H;if(x<L||x>L+PW||y<T||y>T+PH){tooltip.hidden=true;return}const time=t0+(t1-t0)*(x-L)/PW,p=minP*Math.pow(maxP/minP,(y-T)/PH),v=sample(time,p);if(v===null){tooltip.hidden=true;return}tooltip.textContent=fieldName+" · "+fmt(v)+" "+unit+" · "+fmt(p)+" hPa · "+Math.round(44.3*(1-Math.pow(p/1013.25,.1903)))+" km · "+dateTime(new Date(time).toISOString());tooltip.style.left=Math.min(65,Math.max(4,(x/W*100)))+"%";tooltip.hidden=false});canvas.addEventListener("pointerleave",()=>tooltip.hidden=true);
   }
   function renderAccuracy(){
