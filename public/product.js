@@ -377,7 +377,13 @@
     if(lead!=null){let forecastSeries=entries.map(([k,v])=>({name:(names[k]||k)+" · previsione "+leadLabel,color:colors[k]||"#0876ad",points:(v.samples||[]).filter(p=>Number(p.leadHours)===lead).map(p=>({x:p.valid,y:p.forecast})),maxGapHours:48,allowPoints:true})).filter(x=>x.points.length),analysisPoints=[...new Map(entries.flatMap(([,v])=>(v.samples||[]).filter(p=>Number(p.leadHours)===lead).map(p=>[p.valid,{x:p.valid,y:p.analysis}]))).values()];if(analysisPoints.length)forecastSeries.unshift({name:"Analisi IFS",color:"#20384b",points:analysisPoints,maxGapHours:48,allowPoints:true});chart($("#verification-plot"),forecastSeries,"m/s",true,{title:"Confronto in raccolta",message:"Le scadenze verificate sono indicate con punti; le linee compaiono solo dove i campioni sono sufficientemente ravvicinati."})}
     else {const plot=$("#verification-plot");if(plot)plot.outerHTML='<div class="chart-empty compact"><div><strong>Confronto in raccolta</strong>Non sono ancora disponibili scadenze comuni sufficienti per il grafico.</div></div>'}
   }
-  function render(){renderStrength();renderMaps();renderVertical();renderAccuracy()}
+  function render(){
+    renderStrength();
+    const activeView=$('[data-view][aria-selected="true"]')?.dataset.view||"strength";
+    if(activeView==="maps")renderMaps();
+    else if(activeView==="vertical")renderVertical();
+    else if(activeView==="accuracy")renderAccuracy();
+  }
   function renderNextRefresh(){
     const now=new Date(),slots=[5,11,17,23].map(hour=>{const d=new Date(now);d.setUTCHours(hour,17,0,0);if(d<=now)d.setUTCDate(d.getUTCDate()+1);return d}).sort((a,b)=>a-b),next=slots[0],mins=Math.max(0,Math.ceil((next-now)/60000)),hours=Math.floor(mins/60),rest=mins%60;
     const local=new Intl.DateTimeFormat("it-IT",{weekday:"short",day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Europe/Rome"}).format(next);
@@ -436,7 +442,7 @@
       render();
     }catch(e){$("#feed-status").textContent=s.data?"Impossibile aggiornare il feed: restano visibili i dati già caricati.":"Feed non disponibile: il primo aggiornamento dipende dall’esecuzione della pipeline."}
   }
-  $$("[data-model]").forEach(b=>b.addEventListener("click",()=>{s.model=b.dataset.model;normalizeStrengthSelection();renderStrength();renderVertical()}));
+  $$('[data-model]').forEach(b=>b.addEventListener("click",()=>{s.model=b.dataset.model;normalizeStrengthSelection();renderStrength()}));
   $$("[data-view]").forEach(b=>b.addEventListener("click",()=>{$$("[data-view]").forEach(x=>x.setAttribute("aria-selected",String(x===b)));$$(".view-section").forEach(x=>x.classList.toggle("hidden",x.id!=="view-"+b.dataset.view));if(b.dataset.view==="maps")renderMaps();if(b.dataset.view==="vertical")renderVertical();if(b.dataset.view==="accuracy")renderAccuracy()}));
   $$("[data-forecast]").forEach(b=>b.addEventListener("click",()=>{s.kind=b.dataset.forecast;normalizeStrengthSelection();renderStrength()}));
   $$("[data-chart]").forEach(b=>b.addEventListener("click",()=>{s.chart=b.dataset.chart;normalizeStrengthSelection();renderStrength()}));

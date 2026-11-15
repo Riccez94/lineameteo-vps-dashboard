@@ -570,15 +570,20 @@ def fetch_gefs_raw_odds(init: dt.datetime, out: dict) -> None:
                     field = pressure(ds, 10)[uname]
                     if "step" not in field.coords and "step" not in field.dims:
                         raise RuntimeError("GEFS UGRD field has no forecast-step coordinate")
-                    step_values = np.atleast_1d(field["step"].values)
+                    step_coord = field["step"]
+                    step_values = np.atleast_1d(step_coord.values)
                     hours = [int(value / np.timedelta64(1, "h")) if np.issubdtype(step_values.dtype, np.timedelta64)
                              else int(value) for value in step_values]
-                    if lead in hours:
-                        field = field.sel(step=step_values[hours.index(lead)])
-                    elif len(hours) == 1 and hours[0] == lead:
-                        field = field.isel(step=0) if "step" in field.dims else field
-                    else:
+                    if len(hours) != 1 or hours[0] != lead:
                         raise RuntimeError(f"GEFS file f{lead:03d} reports steps {hours}")
+                    # A GRIB containing one forecast lead is commonly decoded
+                    # by cfgrib with a scalar `step` coordinate. In that case
+                    # .sel(step=...) fails because there is no step index. For
+                    # multi-lead data select by dimension position instead.
+                    if "step" in field.dims:
+                        field = field.isel(step=0)
+                    elif step_coord.ndim != 0:
+                        raise RuntimeError(f"GEFS step coordinate has unexpected shape {step_coord.shape}")
                     return member, u60(field), None
                 finally:
                     ds.close()
