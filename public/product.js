@@ -89,6 +89,20 @@
       ...(observations.length?[{name:"Analisi operative IFS archiviate",color:"#0876ad",points:observations,allowPoints:true,line:false,markersOnly:true}]:[]),
     ];
   }
+  function monthlyU60Normal(start,end,monthly) {
+    if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start||!Array.isArray(monthly)||monthly.length!==12)return [];
+    const valueAt=time=>num(monthly[new Date(time).getUTCMonth()]);
+    const points=[{x:new Date(start).toISOString(),y:valueAt(start)}];
+    let boundary=new Date(start);
+    boundary.setUTCDate(1);boundary.setUTCHours(0,0,0,0);boundary.setUTCMonth(boundary.getUTCMonth()+1);
+    while(boundary.getTime()<end){
+      const time=boundary.getTime(),previous=time-1;
+      points.push({x:new Date(previous).toISOString(),y:valueAt(previous)},{x:new Date(time).toISOString(),y:valueAt(time)});
+      boundary.setUTCMonth(boundary.getUTCMonth()+1);
+    }
+    points.push({x:new Date(end).toISOString(),y:valueAt(end)});
+    return points.filter(p=>p.y!==null);
+  }
   function ensembleWindSeries(which) {
     return which.flatMap(k=>{
       const feed=s.data.probabilities?.[k],run=Date.parse(feed?.run||"");
@@ -179,9 +193,12 @@
       chart($("#strength-chart"),series,"m/s",true,{title:"Archivio dei run in raccolta",message:"Il confronto tra emissioni comparirà quando saranno disponibili più run con scadenze valide."})
     }
     else if(s.chart==="season"){
-      const forecasts=modelSeries(which,"u10");
-      const normal=which.flatMap(k=>(s.data.models?.[k]?.series||[]).filter(p=>num(p.u10normal)!==null).map(p=>({x:p.valid,y:num(p.u10normal)})));
-      chart($("#strength-chart"),[...u60ReferenceSeries(),...forecasts.map(a=>({...a,maxGapHours:48})),{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal,maxGapHours:48}],"m/s",true,{title:"Serie U60 in raccolta",message:"Archivio storico o previsioni non ancora sufficienti. Sono mostrati soltanto i campioni effettivamente disponibili."});
+      const references=u60ReferenceSeries(),forecasts=modelSeries(which,"u10").map(a=>({...a,maxGapHours:48}));
+      const timeline=[...references,...forecasts].flatMap(a=>a.points).map(p=>Date.parse(p.x)).filter(Number.isFinite);
+      const monthly=s.data.climatology?.u10Monthly;
+      const normal=monthlyU60Normal(Math.min(...timeline),Math.max(...timeline),monthly);
+      const fallback=which.flatMap(k=>(s.data.models?.[k]?.series||[]).filter(p=>num(p.u10normal)!==null).map(p=>({x:p.valid,y:num(p.u10normal)})));
+      chart($("#strength-chart"),[...references,...forecasts,{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal.length?normal:fallback,maxGapHours:48}],"m/s",true,{title:"Serie U60 in raccolta",message:"Archivio storico o previsioni non ancora sufficienti. Sono mostrati soltanto i campioni effettivamente disponibili."});
     }
     else {
       const forecasts=modelSeries(which,field);
