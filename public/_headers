@@ -9,3 +9,7 @@
 
 /product.js
   Cache-Control: public, max-age=300
+
+/lm/*
+  Cache-Control: no-cache
+  Access-Control-Allow-Origin: *

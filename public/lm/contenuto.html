@@ -1,0 +1,92 @@
+<!-- Linea Meteo - Vortice polare: contenuto caricato da lm_loader.js. Generato da pipeline/lm_forum/build_lm.py -->
+<div class="shell" data-v="46a5a8c4ab">
+  <header class="lmvps-head"><div><span class="lmvps-kicker">Stratosfera &middot; emisfero nord</span><h1 class="lmvps-title">Vortice polare stratosferico</h1><p>Intensit&agrave;, struttura e previsioni del vortice polare: vento a 60&deg;N, ensemble, onde planetarie e mappe dei principali modelli.</p></div><div class="lmvps-upd"><span class="lmvps-time" id="lmvps-time"></span><button type="button" class="lmvps-refresh" id="lmvps-refresh" title="Ricarica i dati"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>Aggiorna</button></div></header>
+  <div id="lmvps-warn" class="lmvps-warn" role="status" hidden></div>
+  <div class="runline"><i class="live-dot"></i><span>Ultimi run:</span><span id="runline"><strong>in attesa dei feed</strong></span><span aria-hidden="true">·</span><span id="next-refresh">Prossimo controllo automatico: in attesa</span></div>
+
+  <section class="panel status-panel" aria-label="Stato VPS">
+    <div class="panel-head"><span class="eyebrow">Stato del vortice polare</span><span id="updated" class="updated">Aggiornamento: in attesa</span></div>
+    <div class="status-grid">
+      <article class="status-card"><div class="status-label">Vento iniziale · 10 hPa · 60°N</div><div id="wind-state" class="status-value">Dati in caricamento</div><div class="meter" aria-hidden="true"><i id="wind-meter"></i></div><div id="wind-value" class="status-detail">U60 in m/s · positivo: occidentale, negativo: orientale.</div><details class="status-more"><summary>Valori per modello</summary><div id="status-initial-models" class="status-list" aria-live="polite"></div></details><div class="status-note">Dato del modello, non osservazione indipendente.</div></article>
+      <article class="status-card"><div class="status-label">Vento previsto · +10 giorni</div><div id="forecast-state" class="status-value">In attesa dei run</div><div id="forecast-value" class="status-detail">U60 a 10 hPa e 60°N; confronta solo la stessa validità.</div><details class="status-more"><summary>Valori per modello</summary><div id="status-forecast-models" class="status-list" aria-live="polite"></div></details></article>
+      <article class="status-card"><div class="status-label">Membri con U60 &lt; 0 · +14 giorni</div><div id="ssw-state" class="status-value">Non disponibile</div><div id="ssw-value" class="status-detail">Quota grezza del campione; non è una probabilità di SSW.</div><details class="status-more"><summary>Dettagli ensemble</summary><div id="status-ensemble-models" class="status-list" aria-live="polite"></div></details></article>
+      <article class="status-card"><div class="status-label">Onde planetarie · v′T′ · 100 hPa</div><div id="wave-state" class="status-value">Non disponibile</div><div id="wave-value" class="status-detail">K·m/s · positivo: trasporto medio verso il polo.</div><details class="status-more"><summary>Valori per modello</summary><div id="status-wave-models" class="status-list" aria-live="polite"></div></details></article>
+    </div>
+    <details class="help"><summary>Che cosa misurano questi indicatori?</summary><p><b>Vento zonale U60:</b> media del vento da ovest verso est a 60°N e 10 hPa (circa 30 km). Positivo significa venti occidentali; negativo, orientali. <b>Previsione IFS:</b> valore del run deterministico a +240 ore, non media dell’ensemble. <b>Membri sotto zero:</b> conteggio e frazione dei membri che prevedono vento orientale a +336 ore; è una quota grezza riferita a quel campione, non una probabilità calibrata e non basta da sola a diagnosticare un riscaldamento stratosferico improvviso. <b>Clima hindcast:</b> distribuzione storica ECMWF S2S 2006–2025 per inizializzazioni vicine alla data dell’anno. La fascia non è una previsione operativa né un intervallo di confidenza; il run ENS attuale si ferma all’ultima scadenza effettivamente pubblicata. <b>Flusso v′T′:</b> misura l’attività delle onde planetarie nella bassa stratosfera; un valore positivo indica trasporto medio di calore verso il polo. Nessun indicatore, preso singolarmente, determina il tempo al suolo.</p></details>
+  </section>
+
+  <nav class="panel views" aria-label="Sezioni dashboard" role="tablist">
+    <button class="view-btn" role="tab" aria-selected="false" data-view="maps">Mappe<small>Campi polari e andamento del run</small></button>
+    <button class="view-btn" role="tab" aria-selected="true" data-view="strength">Intensità VPS<small>Vento, ensemble, onde e tendenze</small></button>
+    <button class="view-btn" role="tab" aria-selected="false" data-view="vertical">Vista verticale<small>Dal suolo fino alla stratosfera</small></button>
+    <button class="view-btn" role="tab" aria-selected="false" data-view="accuracy">Verifica dei modelli<small>Previsioni confrontate con le analisi</small></button>
+  </nav>
+
+  <section id="view-maps" class="view-section hidden" aria-label="Mappe polari">
+    <div class="controls map-controls">
+      <div class="control"><label for="map-model">Modello e run disponibile</label><select id="map-model"><option value="ecmwf_ifs">ECMWF IFS · run più recente</option><option value="aifs">AIFS · run più recente</option><option value="gfs">GFS · run più recente</option><option value="compare">Confronto modelli</option></select></div>
+      <div class="control"><label>Quota</label><div class="seg"><button data-level="10" aria-pressed="true">10 hPa</button><button data-level="50" aria-pressed="false">50 hPa</button><button data-level="both" aria-pressed="false">Entrambe</button></div></div>
+      <div class="control"><label>Campo</label><div class="seg"><button data-field="vortex" aria-pressed="true">Struttura del vortice</button><button data-field="temp" aria-pressed="false">Anomalia temperatura</button><button data-field="height" aria-pressed="false">Anomalia geopotenziale</button><button data-field="wind" aria-pressed="false">Vento zonale</button></div></div>
+    </div>
+    <div class="freshness"><span class="live-dot"></span><span id="map-freshness">Seleziona il passo previsto con il cursore.</span></div>
+    <article class="panel mapbox">
+      <div id="map-display" class="map-placeholder" tabindex="0" aria-label="Mappe del vortice polare; usa le frecce sinistra e destra per cambiare scadenza"><div><strong>Mappe VPS</strong><span>In attesa del feed cartografico del run selezionato.</span></div></div>
+      <div class="sliderrow"><button id="map-play" class="playbtn" aria-label="Avvia animazione" aria-pressed="false">▶</button><button id="map-prev" class="stepbtn" aria-label="Scadenza precedente">‹</button><input id="map-step" type="range" min="0" max="30" step="1" value="0" aria-label="Passo di previsione"><button id="map-next" class="stepbtn" aria-label="Scadenza successiva">›</button><output id="map-step-label">Analisi · +0 h</output></div>
+      <div class="tickrow"><span>Ora</span><span>Giorno 2</span><span>Giorno 4</span><span>Giorno 6</span><span>Giorno 8</span><span>Giorno 10</span><span>Giorno 12</span><span>Giorno 14</span></div>
+      <div class="map-caption"><span id="map-caption">Mappa non ancora disponibile.</span><span>Vista polare · Nord</span></div>
+    </article>
+    <div class="source-strip"><b>Guida alla carta:</b> colori e isolinee sono spiegati nella legenda dentro l’immagine e nella didascalia. Ogni carta riporta modello, run, quota e ora valida. I modelli ensemble mostrano solo i campi che il feed ha effettivamente pubblicato; se una combinazione manca, la dashboard indica quale dato non è disponibile.</div>
+  </section>
+
+  <section id="view-strength" class="view-section" aria-label="Intensità del vortice">
+    <div id="strength-controls" class="controls">
+      <div class="control"><label>Previsione</label><div class="seg"><button data-forecast="single" aria-pressed="true">Run singoli</button><button data-forecast="ensemble" aria-pressed="false">Ensemble</button></div></div>
+      <div class="control"><label>Grafico</label><div class="seg"><button data-chart="wind" aria-pressed="true">Vento U60</button><button data-chart="temperature" aria-pressed="false">Temperatura</button><button data-chart="season" aria-pressed="false">Serie plurimensile</button><button data-chart="trend" aria-pressed="false">Confronto run</button><button data-chart="hindcast" aria-pressed="false">Clima hindcast · 46 g</button></div></div>
+      <div class="control"><label>Modello</label><div class="seg"><button data-model="ecmwf" aria-pressed="true">ECMWF</button><button data-model="gfs" aria-pressed="false">GFS</button><button data-model="aifs" aria-pressed="false">AIFS</button><button data-model="compare" aria-pressed="false">Confronto</button></div></div>
+      <div class="control"><label>Trend · run recenti</label><div class="seg"><button data-run-count="6" aria-pressed="false">6 run</button><button data-run-count="12" aria-pressed="true">12 run</button></div></div>
+    </div>
+    <div class="freshness"><span>◷</span><span id="strength-freshness">Il grafico si aggiorna con l’arrivo dei dati; ogni curva conserva l’origine del run.</span></div>
+    <article class="panel chart-panel">
+      <div class="chart-top"><div><h2 id="strength-title">Vento zonale medio · 60°N · 10 hPa</h2><p id="strength-subtitle">Osservazione, previsione e climatologia; la linea zero indica l’inversione dei venti.</p></div><div class="chart-actions"><button id="refresh" class="iconbtn" title="Aggiorna dati" aria-label="Aggiorna dati">↻</button></div></div>
+      <div id="strength-chart" class="chartbox"><div class="chart-empty"><div><strong>In attesa del feed</strong>Le curve appariranno quando il servizio dati sarà collegato.</div></div></div>
+      <div id="strength-legend" class="legend"></div>
+    </article>
+    <div class="grid-two">
+      <article class="panel mini-panel"><h3>Flusso di calore delle onde · 100 hPa</h3><p>v′T′ stima il trasporto medio di calore verso il polo: positivo indica flusso verso nord. Da solo non conferma una SSW. Unità: K·m/s. Le serie sono mostrate solo per i run singoli che forniscono entrambi i campi.</p><div id="wave-chart" class="chartbox" style="margin-top:10px;min-height:180px"><div class="chart-empty" style="min-height:160px">In attesa dei dati del run.</div></div><div id="wave-legend" class="legend"></div></article>
+      <article class="panel mini-panel"><h3>Membri con vento orientale</h3><p>Quota dei membri con U60 &lt; 0 a 10 hPa e 60°N. È un conteggio grezzo del campione, non una probabilità calibrata di SSW.</p><div id="odds-table" style="margin-top:12px;color:var(--muted);font-size:12px">In attesa dei dati d’ensemble.</div></article>
+    </div>
+  </section>
+
+  <section id="view-vertical" class="view-section hidden" aria-label="Vista verticale">
+    <div class="controls">
+      <div class="control"><label>Modello</label><div class="seg"><button data-vmodel="ecmwf" aria-pressed="true">ECMWF</button><button data-vmodel="gfs" aria-pressed="false">GFS</button><button data-vmodel="aifs" aria-pressed="false">AIFS</button></div></div>
+      <div class="control"><label>Mostra</label><div class="seg"><button data-vfield="wind" aria-pressed="true">Vento</button><button data-vfield="temperature" aria-pressed="false">Temperatura</button><button data-vfield="height" aria-pressed="false">Altezza</button></div></div>
+      <div class="control"><label>Scala</label><div class="seg"><button data-vscale="raw" aria-pressed="false">Valori effettivi</button><button data-vscale="anomaly" aria-pressed="true">Anomalia</button><button data-vscale="sigma" aria-pressed="false">Quanto è insolito</button></div></div>
+    </div>
+    <article class="panel chart-panel"><div class="chart-top"><div><h2 id="vertical-title">Sezione verticale · 10–1000 hPa</h2><p id="vertical-description">Evoluzione prevista per livello di pressione. Passa sul grafico per leggere valore, quota e scadenza.</p></div></div><div id="vertical-chart" class="chartbox vertical-box"><div class="chart-empty compact"><div><strong>Sezione verticale in attesa</strong>Il grafico si popola appena sono disponibili i campi del run selezionato.</div></div></div><div class="section-note">Anomalia = scarto dalla climatologia mensile 1991–2020; “Quanto è insolito” esprime lo scarto in deviazioni standard (σ). I colori indicano valori sotto o sopra la media; i contorni aiutano a seguire le strutture verticali. Dove la copertura climatologica manca, la relativa scala non è disponibile.</div></article>
+  </section>
+
+  <section id="view-accuracy" class="view-section hidden" aria-label="Verifica dei modelli">
+    <div class="controls">
+      <div class="control"><label>Tipo</label><div class="seg"><button data-atype="single" aria-pressed="true">Run singoli</button><button data-atype="ensemble" aria-pressed="false">Ensemble</button></div></div>
+      <div class="control"><label>Modello</label><div class="seg"><button data-amodel="ecmwf" aria-pressed="true">ECMWF</button><button data-amodel="gfs" aria-pressed="false">GFS</button><button data-amodel="aifs" aria-pressed="false">AIFS</button></div></div>
+      <div class="control"><label>Periodo</label><div class="seg"><button data-period="30d" aria-pressed="true">Ultimi 30 giorni</button><button data-period="season" aria-pressed="false">Intera stagione</button></div></div>
+    </div>
+    <article class="panel chart-panel"><div class="chart-top"><div><h2>Quanto si è avvicinato il modello? · vento U60 a 10 hPa</h2><p>Ogni previsione archiviata viene confrontata, alla stessa ora di validità, con l’analisi IFS disponibile. I risultati maturano solo quando quella scadenza è passata.</p></div></div><div id="accuracy-chart" class="chartbox"><div class="chart-empty"><div><strong>Verifiche in raccolta</strong>Il confronto parte con l’archiviazione dei run e delle analisi. Se non ci sono ancora scadenze osservate in comune, non è possibile calcolare un risultato.</div></div></div><div class="section-note"><b>Bias:</b> errore medio (positivo = previsione troppo alta; negativo = troppo bassa). <b>MAE:</b> errore assoluto medio. <b>RMSE:</b> penalizza maggiormente gli errori grandi. Tutti sono in m/s e confrontano il vento medio previsto con l’analisi operativa IFS, che è una stima del modello e non una misura diretta.</div></article>
+  </section>
+
+  <section class="panel guide-panel" aria-label="Guida e domande frequenti">
+    <h2>Guida al monitoraggio VPS</h2>
+    <p>Definizioni, limiti dei dati e criteri di lettura per interpretare grafici e mappe senza confondere previsione e osservazione.</p>
+    <details><summary>Che cos’è il vortice polare stratosferico?</summary><p>È la circolazione invernale di venti occidentali che circonda l’Artico nella stratosfera. La dashboard ne segue il vento zonale a 60°N e 10 hPa, la struttura del geopotenziale, la temperatura e l’attività delle onde atmosferiche.</p></details>
+    <details><summary>Quando si parla di inversione dei venti o SSW maggiore?</summary><p>Un indicatore standard di SSW maggiore è l’inversione del vento zonale medio a 60°N e 10 hPa: da occidentale (positivo) a orientale (negativo). Un singolo membro o una singola scadenza non confermano da soli un evento; contano evoluzione, coerenza e osservazioni successive.</p></details>
+    <details><summary>Un vortice debole significa freddo in Italia?</summary><p>No. Un indebolimento stratosferico può influenzare la circolazione troposferica, ma l’effetto dipende dall’evoluzione successiva e non determina da solo il tempo in Italia o in una località specifica. Questa dashboard non è una previsione meteorologica al suolo.</p></details>
+    <details><summary>Come si leggono colori e linee sulle mappe?</summary><p>La legenda e la didascalia di ogni carta indicano la grandezza, l’unità, il verso dei colori e la climatologia di riferimento. Nelle mappe di struttura, i colori mostrano la temperatura e le linee l’altezza geopotenziale; nelle mappe di anomalia, lo scarto è calcolato rispetto alla media mensile NOAA/NCAR 1991–2020.</p></details>
+    <details><summary>Perché alcuni grafici o modelli non mostrano una curva?</summary><p>La curva compare solo se il feed ha consegnato campioni validi per quel modello, variabile e scadenza. Le quote dei membri ensemble sono mostrate sul numero di membri effettivamente presenti e non sono probabilità calibrate. I controlli indicano quando una serie o un campo non è disponibile.</p></details>
+    <details><summary>Come viene controllata la qualità delle previsioni?</summary><p>La verifica confronta i valori archiviati con l’analisi operativa disponibile alla stessa validità. Bias, errore assoluto medio e RMSE si popolano man mano che le scadenze previste diventano confrontabili; l’analisi operativa è una stima modellistica, non una misura diretta.</p></details>
+    <details><summary>Ogni quanto arrivano aggiornamenti?</summary><p>La pipeline effettua controlli automatici quattro volte al giorno. I prodotti dei diversi centri diventano disponibili con tempi diversi: run, ora valida e stato del feed sono riportati in pagina, e un aggiornamento parziale viene segnalato come tale.</p></details>
+  </section>
+
+  <div class="source-strip"><b>Provenienza:</b> per ogni run sono mostrati modello, validità e fonte. Le mappe sono tracciate dai campi meteorologici originali con climatologia mensile NCEP/NCAR 1991–2020; grafica LineaMeteo. <span id="feed-status">Pipeline in attesa del primo aggiornamento.</span></div>
+  <footer class="data-foot"><span>Linea Meteo · Monitoraggio VPS · progetto di <a href="https://www.lineameteo.it/frasnow-profile-u510.html"><b>Francesco R. (Frasnow)</b></a></span><span id="credits">Fonti operative: ECMWF Open Data · NOAA/NCEP · NOAA PSL.</span></footer>
+</div>
