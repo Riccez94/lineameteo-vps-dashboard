@@ -58,3 +58,7 @@ Apri **Actions → Refresh LineaMeteo VPS dashboard → Run workflow** e avvia i
 - La frequenza prevista è quattro aggiornamenti al giorno (ogni sei ore); se un archivio modello non ha ancora pubblicato il run atteso, la pipeline mantiene il run precedente disponibile.
 - La pipeline usa run e finestre di previsione pubbliche, quindi singoli modelli/campi possono mancare in un aggiornamento.
 - Il progetto è separato da MeteoSpoleto.
+
+## Versione per il forum Linea Meteo
+
+A ogni esecuzione il workflow genera anche `public/lm/` con `pipeline/lm_forum/build_lm.py`: la stessa dashboard adattata al tema del forum (chiaro e scuro), pubblicata su `https://<nome-progetto>.pages.dev/lm/`. Il blocco CMS del forum carica `lm/lm_loader.js`, quindi ogni modifica a `index.html` o `product.js` arriva da sola anche sul forum. Se l'adattamento non riesce (ad esempio dopo un cambiamento grosso del codice), il passaggio viene segnalato come fallito ma il workflow prosegue e sul forum resta l'ultima versione buona. I file in `public/lm/` sono generati: non modificarli a mano.
