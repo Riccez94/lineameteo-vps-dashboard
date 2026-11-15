@@ -12,7 +12,9 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request, urlopen
 
 import matplotlib
 matplotlib.use("Agg")
@@ -754,12 +756,95 @@ def merge_archive(out: dict) -> None:
     for p in current_analysis:
         if int(p.get("leadHours", -1)) == 0 and p.get("u10") is not None:
             analyses[p["valid"]] = float(p["u10"])
+
+    # The operational feed can miss whole cycles when a source is late or the
+    # workflow is unavailable. Keep those observations as exact, sparse points
+    # above, and obtain a separate continuous historical IFS series for the
+    # plot instead of drawing misleading straight lines across missing dates.
+    continuous = history.get("continuousAnalysis", {})
+    if continuous.get("version") != 1 or continuous.get("model") != "ecmwf_ifs025":
+        continuous = {"version": 1, "model": "ecmwf_ifs025", "source": "Open-Meteo Historical Forecast API", "values": {}}
+    values = continuous.setdefault("values", {})
+    now = utcnow()
+    latest_usable = now - dt.timedelta(hours=8)
+    longitudes = [i * 2.5 - 180 for i in range(144)]
+    last_archive_request = 0.0
+    for offset in range(30, -1, -1):
+        day = (now.date() - dt.timedelta(days=offset))
+        expected_times = [dt.datetime.combine(day, dt.time(hour=h), tzinfo=dt.timezone.utc)
+                          for h in (0, 6, 12, 18)]
+        expected_times = [stamp for stamp in expected_times if stamp <= latest_usable]
+        if not expected_times or all(stamp.isoformat().replace("+00:00", "Z") in values for stamp in expected_times):
+            continue
+        params = urlencode({
+            "latitude": ",".join(["60"] * len(longitudes)),
+            "longitude": ",".join(f"{lon:g}" for lon in longitudes),
+            "start_date": day.isoformat(), "end_date": day.isoformat(),
+            "hourly": "wind_speed_10hPa,wind_direction_10hPa",
+            "models": "ecmwf_ifs025", "timezone": "GMT", "wind_speed_unit": "ms",
+        })
+        request = Request(
+            "https://historical-forecast-api.open-meteo.com/v1/forecast?" + params,
+            headers={"User-Agent": "LineaMeteo-VPS/1.0 (historical IFS chart archive)"},
+        )
+        response_data = None
+        for attempt in range(3):
+            try:
+                # Open-Meteo counts each requested coordinate toward its
+                # per-minute quota. Keep the one-time 31-day backfill below it.
+                wait = 15.5 - (time.monotonic() - last_archive_request) if last_archive_request else 0
+                if wait > 0:
+                    time.sleep(wait)
+                last_archive_request = time.monotonic()
+                with urlopen(request, timeout=45) as response:
+                    response_data = json.load(response)
+                break
+            except HTTPError as exc:
+                if attempt == 2:
+                    LOG.warning("Open-Meteo IFS historical archive unavailable for %s: %s", day, exc)
+                else:
+                    time.sleep(60 if exc.code == 429 else 2 ** attempt)
+            except (URLError, TimeoutError, OSError, ValueError) as exc:
+                if attempt == 2:
+                    LOG.warning("Open-Meteo IFS historical archive unavailable for %s: %s", day, exc)
+                else:
+                    time.sleep(2 ** attempt)
+        if response_data is None:
+            continue
+        locations = response_data if isinstance(response_data, list) else [response_data]
+        if len(locations) != len(longitudes):
+            LOG.warning("Open-Meteo IFS archive returned %d of %d longitudes for %s", len(locations), len(longitudes), day)
+            continue
+        times = locations[0].get("hourly", {}).get("time", [])
+        samples_by_time: dict[str, list[float]] = {stamp.isoformat().replace("+00:00", "Z"): [] for stamp in expected_times}
+        for location in locations:
+            hourly = location.get("hourly", {})
+            speed = hourly.get("wind_speed_10hPa", [])
+            direction = hourly.get("wind_direction_10hPa", [])
+            for stamp in expected_times:
+                key = stamp.isoformat().replace("+00:00", "Z")
+                try:
+                    i = times.index(stamp.strftime("%Y-%m-%dT%H:%M"))
+                    ws, wd = float(speed[i]), float(direction[i])
+                    if np.isfinite(ws) and np.isfinite(wd):
+                        # Convert meteorological direction (from) to eastward U.
+                        samples_by_time[key].append(-ws * np.sin(np.deg2rad(wd)))
+                except (ValueError, IndexError, TypeError):
+                    continue
+        for key, sample in samples_by_time.items():
+            # Require at least 90% of the global 2.5° longitude samples.
+            if key not in values and len(sample) >= 130:
+                values[key] = float(np.mean(sample))
+    continuous["values"] = {k: v for k, v in sorted(values.items()) if k >= (now - dt.timedelta(days=190)).isoformat()}
+    continuous["updatedAt"] = now.isoformat()
+    history["continuousAnalysis"] = continuous
     cutoff = (utcnow() - dt.timedelta(days=190)).isoformat()
     history["analyses"] = {k: v for k, v in sorted(analyses.items()) if k >= cutoff}
     history["updated"] = out["generatedAt"]
     history_path.write_text(json.dumps(history, ensure_ascii=False, separators=(",", ":")), "utf-8")
     out["archive"] = history.get("runs", {})
     out["analysis"] = history.get("analyses", {})
+    out["continuousAnalysis"] = history.get("continuousAnalysis", {})
 
 
 def build_verification(out: dict) -> dict:

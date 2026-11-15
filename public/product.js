@@ -54,16 +54,17 @@
     usable.forEach(a=>{
       if(a.band?.length>1){const band=[...a.band].filter(p=>num(p.low)!==null&&num(p.high)!==null&&Number.isFinite(Date.parse(p.x))).sort((p,q)=>Date.parse(p.x)-Date.parse(q.x)),maxGapHours=Number.isFinite(a.maxGapHours)?a.maxGapHours:36;let region=[];const fillRegion=()=>{if(region.length>1){x.save();x.globalAlpha=.14;x.fillStyle=a.color;x.beginPath();region.forEach((p,i)=>i?x.lineTo(X(p.x),Y(p.high)):x.moveTo(X(p.x),Y(p.high)));[...region].reverse().forEach(p=>x.lineTo(X(p.x),Y(p.low)));x.closePath();x.fill();x.restore()}region=[]};band.forEach((p,i)=>{if(i&&Date.parse(p.x)-Date.parse(band[i-1].x)>maxGapHours*3600000)fillRegion();region.push(p)});fillRegion()}
       const p=a.points.filter(q=>num(q.y)!==null&&Number.isFinite(Date.parse(q.x))).sort((q,r)=>Date.parse(q.x)-Date.parse(r.x));
-      if(!p.length)return;x.strokeStyle=a.color;x.lineWidth=a.name==="Analisi IFS archiviata"?3.5:2.8;x.lineJoin="round";x.lineCap="round";x.setLineDash(a.dash?[7,5]:[]);let segment=[];
-      const flush=()=>{if(segment.length>1){x.beginPath();segment.forEach((q,i)=>i?x.lineTo(X(q.x),Y(q.y)):x.moveTo(X(q.x),Y(q.y)));x.stroke()}segment=[]};
-      const maxGapHours=Number.isFinite(a.maxGapHours)?a.maxGapHours:36;
-      p.forEach((q,i)=>{if(i&&Date.parse(q.x)-Date.parse(p[i-1].x)>maxGapHours*3600000)flush();segment.push(q)});flush();x.setLineDash([]);
+      if(!p.length)return;
+      if(a.line!==false){x.strokeStyle=a.color;x.lineWidth=a.name==="Analisi IFS archiviata"?3.5:2.8;x.lineJoin="round";x.lineCap="round";x.setLineDash(a.dash?[7,5]:[]);let segment=[];
+        const flush=()=>{if(segment.length>1){x.beginPath();segment.forEach((q,i)=>i?x.lineTo(X(q.x),Y(q.y)):x.moveTo(X(q.x),Y(q.y)));x.stroke()}segment=[]};
+        const maxGapHours=Number.isFinite(a.maxGapHours)?a.maxGapHours:36;
+        p.forEach((q,i)=>{if(i&&Date.parse(q.x)-Date.parse(p[i-1].x)>maxGapHours*3600000)flush();segment.push(q)});flush();x.setLineDash([])}
       if(a.markers!==false)p.forEach(q=>{x.beginPath();x.fillStyle=a.color;x.arc(X(q.x),Y(q.y),2.6,0,Math.PI*2);x.fill()});
     });
     const rangeHours=(x1-x0)/3600000;
     for(let i=0;i<5;i++){let d=new Date(x0+(x1-x0)*i/4);x.fillStyle="#617b90";x.textAlign=i===0?"left":i===4?"right":"center";x.fillText(rangeHours<48?dateTime(d.toISOString()):date(d.toISOString()),m.l+i*(w-m.l-m.r)/4,h-12)}
     x.save();x.translate(17,h/2);x.rotate(-Math.PI/2);x.textAlign="center";x.fillStyle="#17354e";x.fillText(unit,h/2,0);x.restore();x.textAlign="left";
-    let legend=$("#strength-legend");if(legend&&container.id==="strength-chart"){let unique=[...new Map(usable.map(a=>[a.name,a])).values()];legend.innerHTML=unique.map(a=>'<span class="leg"><i class="'+(a.dash?'dash-swatch':'line-swatch')+'" style="--c:'+a.color+'"></i>'+a.name+'</span>').join("")}
+    let legend=$("#strength-legend");if(legend&&container.id==="strength-chart"){let unique=[...new Map(usable.map(a=>[a.name,a])).values()];legend.innerHTML=unique.map(a=>'<span class="leg"><i class="'+(a.markersOnly?'dot-swatch':a.dash?'dash-swatch':'line-swatch')+'" style="--c:'+a.color+(a.markersOnly?';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c)':'')+'"></i>'+a.name+'</span>').join("")}
     let tooltip=document.createElement("div");tooltip.className="chart-tooltip";tooltip.setAttribute("role","status");tooltip.hidden=true;container.appendChild(tooltip);
     const showPoint=event=>{const rect=c.getBoundingClientRect(),px=(event.clientX-rect.left)*w/rect.width,py=(event.clientY-rect.top)*h/rect.height;let best=null;usable.forEach(a=>a.points.forEach(q=>{if(num(q.y)===null)return;let dx=X(q.x)-px,dy=Y(q.y)-py,d=dx*dx+dy*dy;if(!best||d<best.d)best={a,q,d,dx}}));if(!best||best.d>45*45){tooltip.hidden=true;return}tooltip.textContent=best.a.name+" · "+dateTime(best.q.x)+" · "+fmt(best.q.y)+" "+unit;tooltip.style.left=Math.min(72,Math.max(3,px/w*100))+"%";tooltip.hidden=false};
     c.addEventListener("pointermove",showPoint);c.addEventListener("pointerleave",()=>{tooltip.hidden=true});c.addEventListener("focus",()=>{const q=pts[0];if(q){tooltip.textContent=dateTime(q.x)+" · "+fmt(q.y)+" "+unit;tooltip.style.left="3%";tooltip.hidden=false}});c.addEventListener("blur",()=>{tooltip.hidden=true});
@@ -71,6 +72,22 @@
   }
   function modelSeries(which,field) {
     return which.filter(k=>s.data.models?.[k]?.series?.length).map(k=>({name:names[k]||k,color:colors[k],points:s.data.models[k].series.map(p=>({x:p.valid,y:num(p[field])})).filter(p=>p.y!==null)}));
+  }
+  function u60History() {
+    const cutoff=Date.parse(s.data?.generatedAt||"")-31*24*3600000;
+    const values=s.data?.continuousAnalysis?.values||{};
+    return Object.entries(values).map(([x,y])=>({x,y:num(y)})).filter(p=>p.y!==null&&Number.isFinite(Date.parse(p.x))&&Date.parse(p.x)>=cutoff).sort((a,b)=>Date.parse(a.x)-Date.parse(b.x));
+  }
+  function archivedU60Points() {
+    const cutoff=Date.parse(s.data?.generatedAt||"")-31*24*3600000;
+    return Object.entries(s.data?.analysis||{}).map(([x,y])=>({x,y:num(y)})).filter(p=>p.y!==null&&Number.isFinite(Date.parse(p.x))&&Date.parse(p.x)>=cutoff).sort((a,b)=>Date.parse(a.x)-Date.parse(b.x));
+  }
+  function u60ReferenceSeries() {
+    const history=u60History(),observations=archivedU60Points();
+    return [
+      ...(history.length>1?[{name:"Archivio storico ECMWF IFS 0,25° · Open-Meteo",color:"#17354e",points:history,maxGapHours:9,markers:false}]:[]),
+      ...(observations.length?[{name:"Analisi operative IFS archiviate",color:"#0876ad",points:observations,allowPoints:true,line:false,markersOnly:true}]:[]),
+    ];
   }
   function ensembleWindSeries(which) {
     return which.flatMap(k=>{
@@ -162,23 +179,24 @@
       chart($("#strength-chart"),series,"m/s",true,{title:"Archivio dei run in raccolta",message:"Il confronto tra emissioni comparirà quando saranno disponibili più run con scadenze valide."})
     }
     else if(s.chart==="season"){
-      const observed=Object.entries(s.data.analysis||{}).map(([x,y])=>({x,y:num(y)})).filter(p=>p.y!==null).sort((a,b)=>Date.parse(a.x)-Date.parse(b.x));
       const forecasts=modelSeries(which,"u10");
       const normal=which.flatMap(k=>(s.data.models?.[k]?.series||[]).filter(p=>num(p.u10normal)!==null).map(p=>({x:p.valid,y:num(p.u10normal)})));
-      chart($("#strength-chart"),[{name:"Analisi IFS archiviata",color:"#17354e",points:observed,maxGapHours:48},...forecasts.map(a=>({...a,maxGapHours:48})),{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal,maxGapHours:48}],"m/s",true,{title:"Serie U60 in raccolta",message:"Sono mostrate le scadenze archiviate e previste disponibili, fino a circa 15 giorni. Non è una previsione per l’intera stagione."});
+      chart($("#strength-chart"),[...u60ReferenceSeries(),...forecasts.map(a=>({...a,maxGapHours:48})),{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal,maxGapHours:48}],"m/s",true,{title:"Serie U60 in raccolta",message:"Archivio storico o previsioni non ancora sufficienti. Sono mostrati soltanto i campioni effettivamente disponibili."});
     }
     else {
-      const forecasts=modelSeries(which,field),observed=Object.entries(s.data.analysis||{}).map(([x,y])=>({x,y:num(y)})).filter(p=>p.y!==null).sort((a,b)=>Date.parse(a.x)-Date.parse(b.x));
+      const forecasts=modelSeries(which,field);
       const normalField=s.chart==="temperature"?"t10normal":"u10normal",normal=which.flatMap(k=>(s.data.models?.[k]?.series||[]).filter(p=>num(p[normalField])!==null).map(p=>({x:p.valid,y:num(p[normalField])})));
-      const references=s.chart==="wind"?[{name:"Analisi IFS archiviata",color:"#17354e",points:observed},{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal}]:[{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal}];
+      const references=s.chart==="wind"?[...u60ReferenceSeries(),{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal}]:[{name:"Normale mensile 1991–2020",color:"#77838d",dash:true,markers:false,points:normal}];
       const empty=s.kind==="ensemble"?{title:"Serie dei membri non disponibile",message:"I feed ensemble forniscono i conteggi della tabella, ma non una sequenza temporale dei singoli membri per questo grafico."}:{title:"Previsione non disponibile",message:"Il modello non ha ancora fornito almeno due scadenze valide per questa variabile."};
       chart($("#strength-chart"),forecasts.length?[...references,...forecasts.map(a=>({...a,maxGapHours:48}))]:[],s.chart==="temperature"?"°C":"m/s",s.chart!=="temperature",empty);
     }
     $("#strength-title").textContent=s.chart==="hindcast"?"ECMWF IFS S2S · clima hindcast a 10 hPa · 60°N":s.kind==="ensemble"&&s.chart==="wind"?"Vento zonale ensemble · 10 hPa · 60°N":s.kind==="ensemble"&&s.chart==="temperature"?"Temperatura ensemble · 10 hPa · media 55–65°N":s.chart==="temperature"?"Temperatura a 10 hPa · media 55–65°N":s.chart==="trend"?"Ultimi "+s.runCount+" run archiviati · U60":s.chart==="season"?"Serie U60 · analisi e previsioni":"Vento zonale medio · 60°N · 10 hPa";
     $("#strength-subtitle").textContent=s.chart==="hindcast"?"Fascia: 10°–90° dei membri hindcast ECMWF 2006–2025, con inizializzazioni vicine a questa data dell’anno. La media ENS operativa è mostrata soltanto fino alla sua ultima scadenza disponibile; la climatologia non è una previsione a 46 giorni.":s.kind==="ensemble"&&s.chart==="wind"?"Linea: media dei membri. Fascia: percentili 10°–90°. La tabella riporta separatamente la quota grezza dei membri con U60<0; non è una probabilità calibrata di SSW.":s.kind==="ensemble"&&s.chart==="temperature"?"Media della temperatura a 10 hPa tra 55° e 65°N. Linea: media dei membri; fascia: percentili 10°–90°. Mostriamo solo i modelli che forniscono i campi necessari.":s.chart==="temperature"?"Temperatura media tra 55° e 65°N a 10 hPa. Sono mostrate solo le previsioni effettivamente disponibili.":s.chart==="trend"?"Confronto delle ultime emissioni archiviate: ogni curva è un run distinto. Le differenze mostrano come è cambiata la previsione.":s.chart==="season"?"Serie temporale disponibile: analisi archiviate e previsioni fino a circa 15 giorni. Non rappresenta l’intera stagione; la linea dello zero separa venti occidentali e orientali.":"Vento zonale medio a 60°N e 10 hPa. Sopra lo zero soffiano venti occidentali; sotto lo zero, venti orientali.";
     if(s.chart==="season"){
-      const n=Object.keys(s.data.analysis||{}).length,fc=modelSeries(which,"u10").reduce((sum,a)=>sum+a.points.length,0),latest=Math.max(0,...which.flatMap(k=>(s.data.models?.[k]?.series||[]).map(p=>Number(p.leadHours)||0)));
-      $("#strength-subtitle").textContent+=" Archivio: "+n+" analisi; run disponibile fino a +"+Math.round(latest/24)+" giorni; "+fc+" punti di previsione. I tratti interrotti indicano analisi non archiviate e non vengono ricostruiti. Non è disponibile un’indicazione affidabile per l’intera stagione.";
+      const archived=archivedU60Points().length,historical=u60History().length,fc=modelSeries(which,"u10").reduce((sum,a)=>sum+a.points.length,0),latest=Math.max(0,...which.flatMap(k=>(s.data.models?.[k]?.series||[]).map(p=>Number(p.leadHours)||0)));
+      $("#strength-subtitle").textContent+=" Archivio storico ECMWF IFS 0,25° Open-Meteo: "+historical+" campioni, separati dai "+archived+" punti delle analisi operative LineaMeteo; le fonti possono differire. Previsioni: "+fc+" punti fino a +"+Math.round(latest/24)+" giorni. Non è un’indicazione affidabile per l’intera stagione.";
+    } else if(s.chart==="wind"&&s.kind==="single"&&u60History().length){
+      $("#strength-subtitle").textContent+=" Linea scura: archivio storico ECMWF IFS 0,25° Open-Meteo; punti azzurri: analisi operative LineaMeteo disponibili. Le serie sono distinte e possono differire.";
     }
     let avail=which.filter(k=>s.data.sources?.[k]?.available&&s.data.models?.[k]?.series?.length);$("#strength-freshness").textContent=s.chart==="hindcast"?(s.data.hindcast?.available?"Hindcast ECMWF IFS · "+s.data.hindcast.firstYear+"–"+s.data.hindcast.lastYear+" · "+s.data.hindcast.initSamples+" inizializzazioni stagionali · aggiornato "+dateTime(s.data.hindcast.generatedAt):"Climatologia hindcast ECMWF non disponibile nel feed."):s.kind==="ensemble"&&s.chart==="wind"&&ensembleWindSeries(which).length?which.map(k=>{let f=s.data.probabilities?.[k];return f?.series?.length?names[k]+" · "+dateTime(f.run)+" · "+f.series.length+" scadenze":""}).filter(Boolean).join(" | ")+" · GEFS ai lead campionati.":avail.map(k=>names[k]+" · "+runDescription(k,s.data.sources[k].init)).join(" | ")||(s.kind==="ensemble"?"Nessun membro ensemble utilizzabile per questa selezione.":"Serie non disponibile per "+which.map(k=>names[k]||k).join(", ")+". Il feed del modello non contiene campioni utilizzabili in questa modalità.");
     let wave=which.map(k=>({name:names[k],color:colors[k],points:(s.data.models[k]?.series||[]).filter(p=>num(p.heatFlux100)!==null).map(p=>({x:p.valid,y:num(p.heatFlux100)})),maxGapHours:48})).filter(x=>x.points.length);
@@ -420,7 +438,7 @@
       }else{
         $("#runline .live-dot")?.classList.remove("stale");
       }
-      $("#credits").textContent='Fonti: ECMWF Open Data · ECMWF IFS S2S hindcast via Planette Open Data (CC BY 4.0) · NOAA/NCEP · NOAA PSL.';
+      $("#credits").innerHTML='Fonti operative: ECMWF Open Data · NOAA/NCEP · NOAA PSL. Archivio storico IFS 0,25°: <a href="https://open-meteo.com/en/docs/historical-forecast-api" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0; U zonale calcolata da velocità e direzione del vento).';
       let primary=s.data.models?.ecmwf_ifs?.series||[],now=primary.find(x=>Number(x.leadHours)===0),future=primary.find(x=>Number(x.leadHours)===240&&x.u10!=null);
       if(now?.u10!=null){$("#wind-state").textContent=now.u10<0?"Venti orientali":"Venti occidentali";let normal=now.u10anom==null?null:now.u10-num(now.u10anom);$("#wind-value").textContent=fmt(now.u10)+" m/s · media climatica 1991–2020 "+fmt(normal)+" m/s · "+date(now.valid);$("#wind-meter").style.setProperty("--pos",Math.max(0,Math.min(100,(now.u10+10)/50*100))+"%")}
       if(future?.u10!=null){$("#forecast-state").textContent=future.u10<0?"Venti orientali previsti":"Venti occidentali previsti";$("#forecast-value").textContent=fmt(future.u10)+" m/s · 60°N · validità "+date(future.valid)+" · run ECMWF IFS deterministico"}
